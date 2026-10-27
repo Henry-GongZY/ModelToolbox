@@ -1,0 +1,43 @@
+{
+  "environment": {
+    "python": "3.9.6",
+    "platform": "darwin",
+    "note": "single machine, localhost HTTP, CPU only"
+  },
+  "results": [
+    {
+      "nodes": 1000,
+      "build_onnx_s": 0.015,
+      "import_ir_s": 0.082,
+      "serialize_json_s": 0.052,
+      "json_mb": 0.86,
+      "match_s": 0.065,
+      "matched": 1078,
+      "ambiguous": 0,
+      "diff_build_s": 0.034,
+      "diff_unchanged": 1078,
+      "layout_single_s": 0.098,
+      "layout_pair_s": 0.187,
+      "http_diff_s": 0.646,
+      "http_resp_mb": 2.0,
+      "visible_nodes_note": "frontend culls to viewport; full DOM render not required"
+    },
+    {
+      "nodes": 5000,
+      "build_onnx_s": 0.026,
+      "import_ir_s": 1.264,
+      "serialize_json_s": 0.3,
+      "json_mb": 4.4,
+      "match_s": 1.327,
+      "matched": 5398,
+      "ambiguous": 0,
+      "diff_build_s": 0.214,
+      "diff_unchanged": 5398,
+      "layout_single_s": 2.086,
+      "layout_pair_s": 4.546,
+      "http_diff_s": 10.146,
+      "http_resp_mb": 10.28,
+      "visible_nodes_note": "frontend culls to viewport; full DOM render not required"
+    }
+  ]
+}

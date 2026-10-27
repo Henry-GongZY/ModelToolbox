@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "model": "linear.onnx",
+  "device": "synthetic-board",
+  "unit": "us",
+  "end_to_end_us": 1500.0,
+  "measurements": [
+    {
+      "node_name": "conv_1",
+      "op_type": "Conv",
+      "duration": 620.5,
+      "calls": 1
+    },
+    {
+      "node_name": "relu_1",
+      "op_type": "Relu",
+      "duration": 35.2,
+      "calls": 1
+    },
+    {
+      "node_name": "conv_2",
+      "op_type": "Conv",
+      "duration": 844.3,
+      "calls": 1
+    }
+  ]
+}

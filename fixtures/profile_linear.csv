@@ -1,0 +1,4 @@
+node_name,op_type,duration_us,calls
+conv_1,Conv,620.5,1
+relu_1,Relu,35.2,1
+conv_2,Conv,844.3,1
