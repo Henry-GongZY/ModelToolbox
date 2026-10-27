@@ -176,3 +176,34 @@ def test_no_matches_no_groups():
     assert fr.groups == []
     view = apply_folding(a, fr, set(), "a")
     assert len(view.display_nodes) == 1
+
+
+def test_fold_with_different_node_names_across_sides():
+    """Regression: adjacency must compare B-side partner ids, not A-side ids.
+
+    With identical names on both sides a wrong index is masked; renaming
+    model B's nodes (like a prefixed export) exposes it.
+    """
+    kw = dict(
+        inputs=[("x", "FLOAT", [1])], outputs=[("y", "FLOAT", [1])],
+        initializers=[("w", "FLOAT", [1])],
+    )
+    nodes_a = [("pre", "Relu", ["x"], ["p1"]),
+               ("c1", "Conv", ["p1", "w"], ["m1"]),
+               ("r1", "Relu", ["m1"], ["m2"]),
+               ("c2", "Conv", ["m2", "w"], ["m3"]),
+               ("r2", "Relu", ["m3"], ["m4"]),
+               ("post", "Sigmoid", ["m4"], ["y"])]
+    rename = {"pre": "core/pre", "c1": "core/c1", "r1": "core/r1",
+              "c2": "core/c2", "r2": "core/r2", "post": "core/post"}
+    nodes_b = [(rename[n[0]],) + n[1:] for n in nodes_a]
+    a = make_ir(nodes=nodes_a, model_id="a", **kw)
+    b = make_ir(nodes=nodes_b, model_id="b", **kw)
+    matches = [_M("m1", "c1", "core/c1", 0.95), _M("m2", "r1", "core/r1", 0.95),
+               _M("m3", "c2", "core/c2", 0.95), _M("m4", "r2", "core/r2", 0.95)]
+    fr = find_common_groups(a, b, matches)
+    assert len(fr.groups) == 1, "chained matches with different names must fold"
+    assert set(fr.groups[0].node_ids_a) == {"c1", "r1", "c2", "r2"}
+    assert set(fr.groups[0].node_ids_b) == {"core/c1", "core/r1", "core/c2", "core/r2"}
+    view = apply_folding(a, fr, {fr.groups[0].group_id}, "a")
+    assert view.hidden_nodes == ["c1", "r1", "c2", "r2"]

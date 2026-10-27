@@ -60,3 +60,14 @@
 - 常驻 UI 仅剩：底部状态栏 + 图层面板浮窗（可关）+ 差异导航浮窗（对比模式）。
 - 修复：命令面板跳转后自动展开详情卡；CSS 旧 #legend 块清理。
 - 94/94 测试保持通过。commit: canvas-first UI。
+
+## UNet fixtures（2026-10-28，用户需求）
+
+- 新增 `fixtures/pytorch/unet_models.py`（UNet5：5 层 512×512；UNet5Stem：前后 3×3 conv + 全局残差 y=stem_out(unet(stem_in(x)))+x）与 `scripts/make_unet_fixtures.py`（torch.onnx.export → unet5_512.onnx / unet5_512_stem.onnx，各 1.5MB、65/69 节点）。
+- 过程中发现并修复三个真实缺陷：
+  1. **matcher 缺前缀包装名字证据**：B 侧 torch 导出带 `/unet` 前缀（/up1/up/Constant vs /unet/up1/up/Constant），8 个 Constant 落入对称歧义。新增 `_name_relation_bonus`（路径边界对齐的后缀关系 +0.6）→ UNet 65/65 全匹配、0 歧义。
+  2. **confidence 传播早期锁定**：中位数 0.77（早期邻居少），折叠失败。修复：全部配对完成后用最终状态重算（max 不降级）→ 中位 0.92。
+  3. **folding 邻接索引 bug**：`p2[1]`（A 侧 id）误用于 B 侧边检查，应为 `p2[2]`——小图同名测试掩盖了它，UNet 前缀名暴露。修复 + 新增异名回归测试。
+- 结果：diff = 64 unchanged + 1 connection_changed（/inc/conv1 上游变为 stem_act，诚实语义）+ 4 added（stem_in/act/out/Add）；折叠 @0.9 出 57 节点组。浏览器实测：拖入两文件自动对比、折叠勾选、差异导航 1/5 跳转。
+- 修复 UI 残留 `setStatus is not defined`（重写遗留）与 fitView 对又长又扁图的过缩（scale<0.45 时适配高度锚定左上）。
+- 测试 101/101。

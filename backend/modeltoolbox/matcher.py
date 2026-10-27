@@ -360,12 +360,17 @@ def match_graphs(a: GraphIR, b: GraphIR) -> MatchResult:
 
     # ---- assemble result ----------------------------------------------------
     matches: List[NodeMatch] = []
-    for i, ((uid, vid), c) in enumerate(sorted(conf.items(), key=lambda kv: (kv[0][0], kv[0][1]))):
+    for i, ((uid, vid), c0) in enumerate(sorted(conf.items(), key=lambda kv: (kv[0][0], kv[0][1]))):
+        # Re-score with the FINAL matching state: early propagation rounds
+        # locked in low confidences based on partial neighbourhoods. Never
+        # downgrade anchor confidences, only refine them upward.
+        c_final = max(c0, _confidence(sa, sb, uid, vid, c0, pair_of_a, pair_of_b,
+                                      topology_bonus_applied))
         matches.append(NodeMatch(
             match_id=f"m{i}",
             a_node_id=uid,
             b_node_id=vid,
-            confidence=round(c, 3),
+            confidence=round(c_final, 3),
             evidence=evid.get((uid, vid), []),
         ))
 
@@ -412,6 +417,28 @@ def match_graphs(a: GraphIR, b: GraphIR) -> MatchResult:
         },
     )
     return result
+
+
+def _name_relation_bonus(a_name: str, b_name: str) -> float:
+    """Evidence from the relationship between the two names.
+
+    Equal names are handled elsewhere. A prefix-wrapping relation
+    (B name = prefix + A name, prefix ends at a path boundary, e.g.
+    '/up1/conv' vs '/unet/up1/conv') is a strong indicator produced by
+    module wrapping during export.
+    """
+    if not a_name or not b_name:
+        return 0.0
+    if a_name == b_name:
+        return 0.0  # handled by the exact-name bonus
+    longer, shorter = (b_name, a_name) if len(b_name) > len(a_name) else (a_name, b_name)
+    if longer.endswith(shorter) and len(longer) > len(shorter):
+        # boundary is sound if the remainder before `shorter` ends with "/",
+        # or `shorter` itself starts at a path boundary (leading "/")
+        prefix = longer[: len(longer) - len(shorter)]
+        if prefix.endswith("/") or shorter.startswith("/"):
+            return 0.6  # prefix-wrapped sibling (e.g. wrapped export)
+    return 0.0
 
 
 def _pair_score(sa: _Side, sb: _Side, uid: str, vid: str,
@@ -477,6 +504,7 @@ def _pair_score(sa: _Side, sb: _Side, uid: str, vid: str,
         s += 0.1
     if nu.name and nu.name == nv.name:
         s += 0.3
+    s += _name_relation_bonus(nu.name, nv.name)
     return s
 
 
@@ -497,6 +525,8 @@ def _confidence(sa: _Side, sb: _Side, uid: str, vid: str, score: float,
     conf += 0.1 * _attr_similarity(sa.nodes[uid].attributes, sb.nodes[vid].attributes)
     if sa.nodes[uid].name and sa.nodes[uid].name == sb.nodes[vid].name:
         conf += 0.1
+    elif _name_relation_bonus(sa.nodes[uid].name, sb.nodes[vid].name) > 0:
+        conf += 0.07
     if topology_bonus:
         conf += 0.05
     return max(0.3, min(0.95, conf))

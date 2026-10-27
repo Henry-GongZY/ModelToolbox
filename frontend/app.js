@@ -32,6 +32,10 @@ function toast(msg, ms = 2600) {
   clearTimeout(t._h);
   t._h = setTimeout(() => t.classList.add("hidden"), ms);
 }
+function setStatus(el, msg, cls = "") {
+  el.textContent = msg || "";
+  el.className = "status " + cls;
+}
 function setStatusText(msg, cls = "") {
   $("sb-left").textContent = msg;
   $("sb-left").style.color = cls === "err" ? "var(--removed)" : cls === "ok" ? "var(--added)" : "";

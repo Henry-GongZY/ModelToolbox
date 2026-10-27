@@ -77,8 +77,8 @@ def find_common_groups(
         for u2 in a_succ.get(uid, ()):  # successors in A
             p2 = by_a.get(u2)
             if p2 and p2[0] in adj:
-                # check the same edge exists in B
-                if p2[1] in b_succ.get(vid, set()):
+                # the same edge must exist in B: partner of u2 is p2[2]
+                if p2[2] in b_succ.get(vid, set()):
                     adj[mid].add(p2[0])
                     adj[p2[0]].add(mid)
 

@@ -168,8 +168,18 @@ export class GraphView {
     if (!isFinite(x0)) { x0 = 0; y0 = 0; x1 = 300; y1 = 200; }
     const w = Math.max(x1 - x0, 300), h = Math.max(y1 - y0, 200);
     const pad = 40;
-    this.scale = Math.min((vw - pad * 2) / w, (vh - pad * 2) / h, 1.5);
-    this.scale = Math.max(this.scale, 0.02);
+    let scale = Math.min((vw - pad * 2) / w, (vh - pad * 2) / h, 1.5);
+    if (scale < 0.45) {
+      // very wide/tall graphs (e.g. deep chains): don't shrink into
+      // illegibility — fit the height, anchor top-left, let the user pan.
+      scale = 0.45;
+      this.scale = scale;
+      this.tx = pad - x0 * scale;
+      this.ty = pad - y0 * scale;
+      this._applyTransform();
+      return;
+    }
+    this.scale = Math.max(scale, 0.02);
     this.tx = (vw - w * this.scale) / 2 - x0 * this.scale;
     this.ty = (vh - h * this.scale) / 2 - y0 * this.scale;
     this._applyTransform();

@@ -33,11 +33,9 @@ def _module_tree(module, leaf_rules: List[Dict[str, str]]) -> Dict[str, Any]:
 
     def params_meta(mod):
         count = 0
-        total = 0
         for p in mod.parameters(recurse=False):
-            count += 1
             try:
-                total += p.numel() * p.element_size()
+                count += p.numel()
             except Exception:
                 pass
         return count
