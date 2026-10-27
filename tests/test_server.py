@@ -242,3 +242,39 @@ def test_invalid_json_body(server):
         assert False
     except urllib.error.HTTPError as e:
         assert e.code == 400
+
+
+def test_model_upload_and_nodes(server):
+    import base64
+    with open(fx("linear.onnx"), "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    status, body = _post(server + "/api/model/upload",
+                         {"name": "linear.onnx", "data_base64": b64})
+    assert status == 200
+    assert body["meta"]["node_count"] == 3
+    assert body["meta"]["source_path"] == "linear.onnx"
+    # bad payload
+    status, err = _post(server + "/api/model/upload", {"data_base64": "!!not-b64!!"})
+    assert status == 400
+    status, err = _post(server + "/api/model/upload",
+                        {"data_base64": base64.b64encode(b"junk").decode()})
+    assert status == 422
+    # on-demand node details for expandable nodes
+    status, nodes = _post(server + "/api/model/nodes", {
+        "model_id": body["model_id"], "ids": ["conv_1"]})
+    assert status == 200
+    assert nodes["nodes"][0]["id"] == "conv_1"
+    assert nodes["nodes"][0]["attributes"] == {} or isinstance(nodes["nodes"][0]["attributes"], dict)
+    assert any(p["name"] == "conv_1.weight" for p in nodes["nodes"][0]["params"])
+
+
+def test_profile_upload(server):
+    import base64
+    status, m = _post(server + "/api/model/load", {"path": fx("linear.onnx")})
+    with open(fx("profile_linear.json"), "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    status, body = _post(server + "/api/profile/upload", {
+        "name": "profile_linear.json", "data_base64": b64,
+        "model_id": m["model_id"]})
+    assert status == 200
+    assert body["mapped"]["coverage"] == 1.0

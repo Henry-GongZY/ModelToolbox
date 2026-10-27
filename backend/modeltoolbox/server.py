@@ -21,8 +21,8 @@ from modeltoolbox.diff_engine import DiffIR, diff_models
 from modeltoolbox.folding import apply_folding, find_common_groups
 from modeltoolbox.layout import layout_diff_pair, layout_single
 from modeltoolbox.matcher import match_graphs
-from modeltoolbox.onnx_importer import ModelLoadError, load_onnx
-from modeltoolbox.profile_adapter import ProfileFormatError, load_profile
+from modeltoolbox.onnx_importer import ModelLoadError, load_onnx, load_onnx_bytes
+from modeltoolbox.profile_adapter import ProfileFormatError, load_profile, load_profile_text
 from modeltoolbox.profile_mapper import map_profile
 from modeltoolbox.pytorch_importer import (
     PyTorchImportSpec,
@@ -156,10 +156,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             routes = {
                 "/api/model/load": self._model_load,
+                "/api/model/upload": self._model_upload,
+                "/api/model/nodes": self._model_nodes,
                 "/api/model/layout": self._model_layout,
                 "/api/diff": self._diff,
                 "/api/fold": self._fold,
                 "/api/profile/load": self._profile_load,
+                "/api/profile/upload": self._profile_upload,
                 "/api/pytorch/load": self._pytorch_load,
                 "/api/export/diff": self._export_diff,
                 "/api/export/profile": self._export_profile,
@@ -181,18 +184,71 @@ class Handler(BaseHTTPRequestHandler):
             self._error(f"internal error: {type(e).__name__}: {e}", 500, "internal")
 
     # ---- handlers ----
-    def _model_load(self, body):
-        path = body.get("path")
-        if not path or not isinstance(path, str):
-            self._error("'path' is required"); return
+    def _model_upload(self, body):
+        """Load a model from uploaded bytes (Netron-style file picker)."""
+        import base64
+        name = body.get("name") or "uploaded.onnx"
+        data_b64 = body.get("data_base64") or ""
+        if not data_b64:
+            self._error("'data_base64' is required"); return
+        try:
+            data = base64.b64decode(data_b64, validate=True)
+        except Exception as e:
+            self._error(f"invalid base64 payload: {e}"); return
         model_id = uuid.uuid4().hex[:12]
-        ir = load_onnx(path, model_id)
+        ir = load_onnx_bytes(data, model_id, source_path=name)
         layout = layout_single(ir)
         with STORE.lock:
             STORE.models[model_id] = {"ir": ir, "ts": time.time()}
             STORE.gc()
-        self._json({
-            "model_id": model_id,
+        self._json(self._model_payload(ir, layout))
+
+    def _model_nodes(self, body):
+        """On-demand node details (used by expandable graph nodes)."""
+        model_id = body.get("model_id")
+        ids = body.get("ids") or []
+        with STORE.lock:
+            rec = STORE.models.get(model_id) if model_id else None
+        if rec is None:
+            self._error(f"unknown or missing model_id: {model_id!r}"); return
+        ir = rec["ir"]
+        want = set(ids)
+        nodes = [n.to_dict() if hasattr(n, "to_dict") else _node_dict(n)
+                 for n in ir.nodes if n.id in want]
+        self._json({"model_id": model_id, "nodes": nodes})
+
+    def _profile_upload(self, body):
+        """Load a profile from uploaded text (Netron-style file picker)."""
+        import base64
+        name = body.get("name") or "uploaded profile"
+        data_b64 = body.get("data_base64") or ""
+        if not data_b64:
+            self._error("'data_base64' is required"); return
+        try:
+            text = base64.b64decode(data_b64, validate=True).decode("utf-8-sig")
+        except Exception as e:
+            self._error(f"cannot decode uploaded profile: {e}"); return
+        model_id = body.get("model_id")
+        ir = None
+        if model_id:
+            with STORE.lock:
+                rec = STORE.models.get(model_id)
+                ir = rec["ir"] if rec else None
+            if ir is None:
+                self._error(f"unknown model_id: {model_id!r}"); return
+        profile = load_profile_text(text, source_path=name)
+        mapped = map_profile(profile, ir) if ir is not None else None
+        profile_id = uuid.uuid4().hex[:12]
+        with STORE.lock:
+            STORE.profiles[profile_id] = {"profile": profile, "mapped": mapped,
+                                          "model_id": model_id, "ts": time.time()}
+            STORE.gc()
+        self._json(self._profile_payload(profile_id, profile, mapped, ir))
+
+    @staticmethod
+    def _model_payload(ir, layout):
+        return {
+            "model_id": ir.model_id,
             "meta": {
                 "name": ir.name, "producer": ir.producer,
                 "source_path": ir.source_path,
@@ -207,7 +263,56 @@ class Handler(BaseHTTPRequestHandler):
             },
             "ir": ir.to_dict(),
             "layout": _layout_dict(layout),
-        })
+        }
+
+    @staticmethod
+    def _profile_payload(profile_id, profile, mapped, ir):
+        resp = {
+            "profile_id": profile_id,
+            "summary": {
+                "format": profile.format, "unit": profile.unit,
+                "model_name": profile.model_name, "device": profile.device,
+                "record_count": len(profile.records),
+                "end_to_end_us": profile.end_to_end_us,
+                "model_fingerprint": profile.model_fingerprint,
+                "warnings": profile.warnings,
+            },
+            "records": [
+                {"index": r.index, "node_ref": r.node_ref, "ref_kind": r.ref_kind,
+                 "op_type": r.op_type, "duration_us": r.duration_us,
+                 "calls": r.calls, "fused": r.fused, "kernel_name": r.kernel_name}
+                for r in profile.records
+            ],
+        }
+        if mapped is not None:
+            nodes_by_id = {n.id: n for n in ir.nodes}
+            resp["mapped"] = {
+                "per_node": {nid: {"node_id": p.node_id,
+                                   "duration_us": p.duration_us,
+                                   "calls": p.calls, "share": p.share,
+                                   "record_indices": p.record_indices}
+                             for nid, p in mapped.per_node.items()},
+                "unmapped": [vars(u) for u in mapped.unmapped],
+                "coverage": mapped.coverage,
+                "total_mapped_us": mapped.total_mapped_us,
+                "end_to_end_us": mapped.end_to_end_us,
+                "model_fingerprint_matched": mapped.model_fingerprint_matched,
+                "warnings": mapped.warnings,
+            }
+            resp["op_by_node"] = {nid: n.op_type for nid, n in nodes_by_id.items()}
+        return resp
+
+    def _model_load(self, body):
+        path = body.get("path")
+        if not path or not isinstance(path, str):
+            self._error("'path' is required"); return
+        model_id = uuid.uuid4().hex[:12]
+        ir = load_onnx(path, model_id)
+        layout = layout_single(ir)
+        with STORE.lock:
+            STORE.models[model_id] = {"ir": ir, "ts": time.time()}
+            STORE.gc()
+        self._json(self._model_payload(ir, layout))
 
     def _model_layout(self, body):
         ir = self._get_model(body)
@@ -223,11 +328,28 @@ class Handler(BaseHTTPRequestHandler):
         return rec["ir"]
 
     def _diff(self, body):
+        import base64 as _b64
         path_a, path_b = body.get("path_a"), body.get("path_b")
-        if not path_a or not path_b:
-            self._error("'path_a' and 'path_b' are required"); return
-        a = load_onnx(path_a, uuid.uuid4().hex[:12])
-        b = load_onnx(path_b, uuid.uuid4().hex[:12])
+        data_a, data_b = body.get("data_a"), body.get("data_b")
+        if data_a and data_b:
+            # uploaded bytes (Netron-style picker); optional display names
+            name_a = body.get("name_a") or "model_a.onnx"
+            name_b = body.get("name_b") or "model_b.onnx"
+            try:
+                a = load_onnx_bytes(_b64.b64decode(data_a, validate=True),
+                                    uuid.uuid4().hex[:12], source_path=name_a)
+                b = load_onnx_bytes(_b64.b64decode(data_b, validate=True),
+                                    uuid.uuid4().hex[:12], source_path=name_b)
+            except Exception as e:
+                if isinstance(e, ModelLoadError):
+                    raise
+                raise ModelLoadError(f"invalid uploaded model payload: {e}")
+        elif path_a and path_b:
+            a = load_onnx(path_a, uuid.uuid4().hex[:12])
+            b = load_onnx(path_b, uuid.uuid4().hex[:12])
+        else:
+            self._error("'data_a/data_b' (uploads) or 'path_a/path_b' are required")
+            return
         match = match_graphs(a, b)
         diff = diff_models(a, b)
         la, lb = layout_diff_pair(a, b, match.matches)
@@ -251,6 +373,13 @@ class Handler(BaseHTTPRequestHandler):
             "diff": diff.to_dict(),
             "folding": _folding_dict(folding),
             "layouts": {"a": _layout_dict(la), "b": _layout_dict(lb)},
+            # light node summaries so the UI can render Netron-style nodes
+            "nodes_a": {n.id: {"op": n.op_type, "display": n.display_name,
+                                "outputs": [t for t in n.outputs if t]}
+                        for n in a.nodes},
+            "nodes_b": {n.id: {"op": n.op_type, "display": n.display_name,
+                                "outputs": [t for t in n.outputs if t]}
+                        for n in b.nodes},
         })
 
     def _fold(self, body):
@@ -295,40 +424,7 @@ class Handler(BaseHTTPRequestHandler):
             STORE.profiles[profile_id] = {"profile": profile, "mapped": mapped,
                                           "model_id": model_id, "ts": time.time()}
             STORE.gc()
-        resp: Dict[str, Any] = {
-            "profile_id": profile_id,
-            "summary": {
-                "format": profile.format, "unit": profile.unit,
-                "model_name": profile.model_name, "device": profile.device,
-                "record_count": len(profile.records),
-                "end_to_end_us": profile.end_to_end_us,
-                "model_fingerprint": profile.model_fingerprint,
-                "warnings": profile.warnings,
-            },
-            "records": [
-                {"index": r.index, "node_ref": r.node_ref, "ref_kind": r.ref_kind,
-                 "op_type": r.op_type, "duration_us": r.duration_us,
-                 "calls": r.calls, "fused": r.fused, "kernel_name": r.kernel_name}
-                for r in profile.records
-            ],
-        }
-        if mapped is not None:
-            nodes_by_id = {n.id: n for n in ir.nodes}
-            resp["mapped"] = {
-                "per_node": {nid: {"node_id": p.node_id,
-                                   "duration_us": p.duration_us,
-                                   "calls": p.calls, "share": p.share,
-                                   "record_indices": p.record_indices}
-                             for nid, p in mapped.per_node.items()},
-                "unmapped": [vars(u) for u in mapped.unmapped],
-                "coverage": mapped.coverage,
-                "total_mapped_us": mapped.total_mapped_us,
-                "end_to_end_us": mapped.end_to_end_us,
-                "model_fingerprint_matched": mapped.model_fingerprint_matched,
-                "warnings": mapped.warnings,
-            }
-            resp["op_by_node"] = {nid: n.op_type for nid, n in nodes_by_id.items()}
-        self._json(resp)
+        self._json(self._profile_payload(profile_id, profile, mapped, ir))
 
     def _pytorch_load(self, body):
         try:
@@ -415,6 +511,11 @@ def _diff_export(diff: DiffIR, fmt: str):
     if fmt == "json":
         return ex.export_diff_json(diff), "application/json", "json"
     raise ValueError(f"unsupported export format: {fmt!r}")
+
+
+def _node_dict(n):
+    from dataclasses import asdict
+    return asdict(n)
 
 
 def _layout_dict(lr) -> dict:

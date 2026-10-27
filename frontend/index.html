@@ -3,202 +3,159 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ModelToolbox — 模型结构差异分析工作台</title>
+<title>ModelToolbox</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header id="topbar">
-  <div class="brand">ModelToolbox <span class="sub">本地模型结构差异分析</span></div>
-  <nav id="mode-tabs">
-    <button data-mode="browse" class="tab active">单模型浏览</button>
-    <button data-mode="compare" class="tab">双模型对比</button>
-    <button data-mode="pytorch" class="tab">PyTorch 层级</button>
-  </nav>
-  <div id="layers" class="layers hidden">
-    <label><input type="checkbox" id="layer-diff"> Diff 图层</label>
-    <label><input type="checkbox" id="layer-heat"> 热力图图层</label>
-    <select id="heat-mode" class="hidden">
-      <option value="duration">按耗时着色</option>
-      <option value="share">按占比着色</option>
+<input type="file" id="file-open" accept=".onnx,.bin" class="hidden-file">
+<input type="file" id="file-profile" accept=".json,.csv,.txt" class="hidden-file">
+<input type="file" id="file-open-b" accept=".onnx,.bin" class="hidden-file">
+<input type="file" id="file-profile-a" accept=".json,.csv,.txt" class="hidden-file">
+<input type="file" id="file-profile-b" accept=".json,.csv,.txt" class="hidden-file">
+
+<header id="menubar">
+  <div class="menu-left">
+    <span class="logo">ModelToolbox</span>
+    <button id="btn-open" class="menu-item" title="打开 ONNX 模型 (Ctrl+O)">打开模型…</button>
+    <button id="btn-compare" class="menu-item" title="选择两个模型进行结构对比">对比…</button>
+    <button id="btn-pytorch" class="menu-item">PyTorch…</button>
+    <button id="btn-export" class="menu-item" disabled>导出</button>
+  </div>
+  <div class="menu-center" id="mode-indicator">单模型浏览</div>
+  <div class="menu-right">
+    <label class="menu-item toggle" id="tg-diff-wrap" title="结构差异图层"><input type="checkbox" id="layer-diff"> Diff</label>
+    <label class="menu-item toggle" id="tg-heat-wrap" title="性能热力图图层"><input type="checkbox" id="layer-heat"> 热力</label>
+    <select id="heat-mode" class="menu-select hidden" title="热力着色依据">
+      <option value="duration">耗时</option>
+      <option value="share">占比</option>
     </select>
-    <label class="chk hidden" id="sync-view-wrap"><input type="checkbox" id="sync-view" checked> 同步视图</label>
-    <label class="chk hidden" id="diff-only-wrap"><input type="checkbox" id="diff-only"> 仅看差异</label>
+    <label class="menu-item toggle" id="tg-tensornames" title="在边上显示 tensor 名"><input type="checkbox" id="show-tensornames" checked> Tensor 名</label>
+    <label class="menu-item toggle cmp-only hidden" id="tg-sync-wrap"><input type="checkbox" id="sync-view" checked> 同步</label>
+    <label class="menu-item toggle cmp-only hidden" id="tg-only-wrap"><input type="checkbox" id="diff-only"> 仅看差异</label>
+    <button id="btn-zoom-fit" class="menu-item icon" title="适合视图">⤢</button>
+    <button id="btn-panel" class="menu-item icon" title="模型属性面板">ⓘ</button>
   </div>
 </header>
 
 <main id="main">
-  <!-- ===== Browse mode ===== -->
-  <section id="view-browse" class="view">
-    <aside class="sidebar">
-      <div class="panel">
-        <h3>加载 ONNX 模型</h3>
-        <input type="text" id="browse-path" placeholder="ONNX 文件路径 (本地)"
-               value="fixtures/linear.onnx">
-        <div class="row">
-          <button id="browse-load" class="primary">加载</button>
-          <button id="browse-fit">适合视图</button>
-          <button id="browse-export" disabled>导出 JSON</button>
-        </div>
-        <div id="browse-status" class="status"></div>
-      </div>
-      <div class="panel" id="browse-meta-panel">
-        <h3>模型信息</h3>
-        <div id="browse-meta" class="meta">未加载</div>
-      </div>
-      <div class="panel" id="browse-profile-panel">
-        <h3>Profile（可选）</h3>
-        <input type="text" id="browse-profile-path" placeholder="profile JSON/CSV 路径">
-        <div class="row">
-          <button id="browse-profile-load">导入 profile</button>
-        </div>
-        <div id="browse-profile-status" class="status"></div>
-      </div>
-      <div class="panel" id="heat-legend-panel">
-        <h3>图例</h3>
-        <div id="legend-diff">
-          <div class="legend-item"><span class="swatch sw-unchanged"></span>结构相同</div>
-          <div class="legend-item"><span class="swatch sw-added"></span>新增 (B侧独有)</div>
-          <div class="legend-item"><span class="swatch sw-removed"></span>删除 (A侧独有)</div>
-          <div class="legend-item"><span class="swatch sw-modified"></span>修改 (op/属性/shape/连接)</div>
-          <div class="legend-item"><span class="swatch sw-ambiguous"></span>匹配不确定/歧义</div>
-        </div>
-        <div id="legend-heat" class="hidden">
-          <div class="heat-scale"><span class="h0"></span><span class="h1"></span><span class="h2"></span><span class="h3"></span><span class="h4"></span></div>
-          <div class="heat-labels"><span id="heat-min">min</span><span id="heat-max">max</span></div>
-        </div>
-      </div>
-    </aside>
-    <div class="graph-wrap">
-      <div class="graph-toolbar">
-        <input type="text" id="browse-search" placeholder="搜索节点/tensor/op…">
-        <button id="browse-search-next">下一个</button>
-        <span id="browse-search-info" class="muted"></span>
-      </div>
-      <div id="browse-graph" class="graph"></div>
+  <!-- browse / compare share the same canvas shell -->
+  <section id="view-graph" class="view">
+    <div id="compare-header" class="hidden">
+      <div class="cmp-tab" id="cmp-head-a">A: <span>—</span></div>
+      <div class="cmp-tab" id="cmp-head-b">B: <span>—</span></div>
     </div>
-    <aside class="detail" id="browse-detail"><div class="panel"><h3>节点详情</h3><div class="meta">点击节点查看</div></div></aside>
-  </section>
-
-  <!-- ===== Compare mode ===== -->
-  <section id="view-compare" class="view hidden">
-    <aside class="sidebar">
-      <div class="panel">
-        <h3>加载两个模型</h3>
-        <label>基准模型 A</label>
-        <input type="text" id="cmp-path-a" value="fixtures/linear.onnx">
-        <label>候选模型 B</label>
-        <input type="text" id="cmp-path-b" value="fixtures/op_replaced.onnx">
-        <div class="row">
-          <button id="cmp-load" class="primary">对比</button>
-          <button id="cmp-fit">双侧适合视图</button>
-        </div>
-        <details>
-          <summary>折叠选项</summary>
-          <label>最小组大小 <input type="number" id="cmp-min-size" value="3" min="2" style="width:4em"></label>
-          <label>最低置信度 <input type="number" id="cmp-min-conf" value="0.9" min="0" max="1" step="0.05" style="width:5em"></label>
-        </details>
-        <div id="cmp-status" class="status"></div>
-      </div>
-      <div class="panel">
-        <h3>差异摘要</h3>
-        <div id="cmp-summary" class="meta">未加载</div>
-      </div>
-      <div class="panel flex-grow">
-        <h3>差异导航 <span class="muted" id="diff-nav-pos"></span></h3>
-        <div class="row">
-          <button id="diff-prev">◀ 上一个</button>
-          <button id="diff-next">下一个 ▶</button>
-        </div>
-        <div id="diff-list" class="diff-list"></div>
-      </div>
-      <div class="panel" id="cmp-fold-panel">
-        <h3>公共子图折叠</h3>
-        <div id="fold-groups" class="diff-list">无</div>
-        <label class="chk"><input type="checkbox" id="sync-fold" checked> 同步两侧折叠状态</label>
-      </div>
-      <div class="panel">
-        <h3>Profile 热力图（可选）</h3>
-        <label>模型 A 的 profile</label>
-        <input type="text" id="cmp-profile-a" placeholder="profile JSON/CSV 路径">
-        <label>模型 B 的 profile</label>
-        <input type="text" id="cmp-profile-b" placeholder="profile JSON/CSV 路径">
-        <div class="row">
-          <button id="cmp-profile-load">导入并映射</button>
-        </div>
-        <div id="cmp-profile-status" class="status"></div>
-      </div>
-      <div class="panel">
-        <h3>导出</h3>
-        <div class="row">
-          <button id="cmp-export-json" disabled>JSON</button>
-          <button id="cmp-export-csv" disabled>CSV</button>
-          <button id="cmp-export-md" disabled>MD</button>
-          <button id="cmp-export-html" disabled>HTML</button>
-        </div>
-      </div>
-    </aside>
-    <div class="graph-wrap dual">
-      <div class="dual-pane">
-        <div class="pane-title">模型 A <span id="cmp-name-a" class="muted"></span></div>
-        <div class="graph-toolbar">
-          <input type="text" id="cmp-search-a" placeholder="搜索 A 侧…">
-          <span id="cmp-search-info-a" class="muted"></span>
-        </div>
+    <div id="dual-wrap" class="hidden">
+      <div class="graph-pane">
         <div id="cmp-graph-a" class="graph"></div>
       </div>
-      <div class="dual-pane">
-        <div class="pane-title">模型 B <span id="cmp-name-b" class="muted"></span></div>
-        <div class="graph-toolbar">
-          <input type="text" id="cmp-search-b" placeholder="搜索 B 侧…">
-          <span id="cmp-search-info-b" class="muted"></span>
-        </div>
+      <div class="graph-pane">
         <div id="cmp-graph-b" class="graph"></div>
       </div>
     </div>
-    <aside class="detail" id="cmp-detail"><div class="panel"><h3>节点详情</h3><div class="meta">点击节点查看（含字段级变化）</div></div></aside>
+    <div id="single-wrap" class="graph-pane full">
+      <div id="browse-graph" class="graph"></div>
+    </div>
+    <div id="diff-nav" class="hidden">
+      <button id="diff-prev" title="上一个差异">◀</button>
+      <span id="diff-nav-pos">0/0</span>
+      <button id="diff-next" title="下一个差异">▶</button>
+    </div>
   </section>
 
-  <!-- ===== PyTorch mode ===== -->
+  <!-- pytorch view -->
   <section id="view-pytorch" class="view hidden">
-    <aside class="sidebar">
-      <div class="panel">
-        <h3>加载本地 PyTorch 项目</h3>
-        <label>项目目录</label>
-        <input type="text" id="pt-project" placeholder="/abs/path/to/project">
-        <label>模块路径</label>
-        <input type="text" id="pt-import" placeholder="mymodels">
-        <label>类名</label>
-        <input type="text" id="pt-class" placeholder="Net">
-        <label>Leaf 规则 (每行一条: class:Name 或 path:pattern)</label>
-        <textarea id="pt-leaves" rows="3" placeholder="class:CustomBlock"></textarea>
-        <div class="row">
-          <button id="pt-load" class="primary">加载</button>
-        </div>
-        <div id="pt-status" class="status"></div>
-        <p class="note">⚠ 仅导入你信任的本地代码。子进程隔离+超时不是沙箱。</p>
+    <aside id="pt-sidebar" class="sidebar">
+      <h3>加载本地 PyTorch 项目</h3>
+      <label>项目目录</label>
+      <input type="text" id="pt-project" placeholder="/abs/path/to/project">
+      <label>模块路径</label>
+      <input type="text" id="pt-import" placeholder="mymodels">
+      <label>类名</label>
+      <input type="text" id="pt-class" placeholder="Net">
+      <label>Leaf 规则（class:Name 或 path:pattern，每行一条）</label>
+      <textarea id="pt-leaves" rows="3" placeholder="class:CustomBlock"></textarea>
+      <div class="row">
+        <button id="pt-load" class="primary">加载</button>
+        <button id="pt-view-toggle">概览/详细</button>
       </div>
-      <div class="panel flex-grow">
-        <h3>模块层级</h3>
-        <div id="pt-tree" class="diff-list">未加载</div>
-      </div>
+      <div id="pt-status" class="status"></div>
+      <p class="note">⚠ 仅导入你信任的本地代码。子进程隔离 + 超时不是沙箱。</p>
+      <div id="pt-tree" class="tree"></div>
     </aside>
-    <div class="graph-wrap">
-      <div class="graph-toolbar">
-        <button id="pt-view-toggle">切换 概览/详细</button>
-        <span id="pt-view-mode" class="muted">概览（模块树）</span>
-      </div>
+    <div class="graph-pane full">
       <div id="pt-graph" class="graph"></div>
     </div>
-    <aside class="detail" id="pt-detail"><div class="panel"><h3>模块详情</h3><div class="meta">点击模块查看</div></div></aside>
   </section>
+
+  <!-- right properties drawer -->
+  <aside id="props" class="hidden">
+    <div class="props-head">
+      <span id="props-title">属性</span>
+      <button id="props-close">✕</button>
+    </div>
+    <div id="props-body" class="props-body"></div>
+  </aside>
 </main>
 
+<!-- compare setup dialog -->
+<div id="dlg-compare" class="modal hidden">
+  <div class="modal-card">
+    <h3>选择两个模型进行对比</h3>
+    <div class="pick-row">
+      <span class="pick-label">基准 A</span>
+      <button class="pick-btn" id="pick-a">选择文件…</button>
+      <span id="pick-a-name" class="pick-name">未选择</span>
+    </div>
+    <div class="pick-row">
+      <span class="pick-label">候选 B</span>
+      <button class="pick-btn" id="pick-b">选择文件…</button>
+      <span id="pick-b-name" class="pick-name">未选择</span>
+    </div>
+    <details>
+      <summary>折叠与匹配选项</summary>
+      <label>最小组大小 <input type="number" id="cmp-min-size" value="3" min="2" style="width:4em"></label>
+      <label>最低置信度 <input type="number" id="cmp-min-conf" value="0.9" min="0" max="1" step="0.05" style="width:5em"></label>
+    </details>
+    <div class="row">
+      <button class="primary" id="cmp-run">开始对比</button>
+      <button id="cmp-cancel">取消</button>
+    </div>
+    <div id="cmp-status" class="status"></div>
+  </div>
+</div>
+
+<!-- export menu -->
+<div id="export-menu" class="popover hidden">
+  <button data-fmt="json">Diff JSON</button>
+  <button data-fmt="csv">Diff CSV</button>
+  <button data-fmt="md">Diff Markdown</button>
+  <button data-fmt="html">Diff HTML</button>
+  <hr>
+  <button data-fmt="pjson">Profile JSON</button>
+  <button data-fmt="pcsv">Profile CSV</button>
+</div>
+
 <footer id="statusbar">
-  <span id="sb-left">就绪</span>
+  <span id="sb-left">就绪 — 打开模型或拖入 .onnx 文件</span>
   <span id="sb-right"></span>
 </footer>
 
+<div id="drop-overlay" class="hidden">
+  <div>拖放 .onnx 模型文件以打开<div class="drop-sub">对比模式：一次拖入两个文件</div></div>
+</div>
 <div id="toast" class="hidden"></div>
+<div id="legend" class="hidden">
+  <h4>图例</h4>
+  <div class="legend-item"><span class="swatch sw-unchanged"></span>结构相同</div>
+  <div class="legend-item"><span class="swatch sw-added"></span>新增 (B 独有)</div>
+  <div class="legend-item"><span class="swatch sw-removed"></span>删除 (A 独有)</div>
+  <div class="legend-item"><span class="swatch sw-modified"></span>修改</div>
+  <div class="legend-item"><span class="swatch sw-ambiguous"></span>匹配不确定</div>
+  <div class="heat-legend">
+    <div class="heat-scale"><span class="h0"></span><span class="h1"></span><span class="h2"></span><span class="h3"></span><span class="h4"></span></div>
+    <div class="heat-labels"><span id="heat-min">min</span><span>热力</span><span id="heat-max">max</span></div>
+  </div>
+</div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

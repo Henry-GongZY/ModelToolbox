@@ -41,3 +41,10 @@
 - 5k：import 1.26s / match 1.33s（5398 全配对 0 歧义）/ diff 0.21s / layout 2.1s / pair layout 4.5s / **HTTP 10.1s（10.3MB）**
 - 浏览器 5k：加载 8s（后端 4.1s + 前端解析渲染），缩放交互 ~320ms，**视口裁剪生效：10399 边仅绘制 271 条、5398 节点仅绘制 141 个**。
 - 92/92 测试保持全绿。
+
+## Netron 风格重构（2026-10-28，用户反馈驱动）
+
+- 用户要求：节点详情就地显示（点击展开/再点收起）；加载方式改为文件选择/拖拽（去路径输入框）；整体参考 Netron 视觉。
+- 后端：新增 `/api/model/upload`、`/api/profile/upload`（base64 上传）、`/api/model/nodes`（按需节点详情）、`/api/diff` 支持 data_a/data_b 上传字节；layout edge_points 附带 tensor 名；diff 响应附轻量 nodes_a/nodes_b 摘要。测试 92→94。
+- 前端重写：Netron 式菜单栏（打开模型…/对比…/PyTorch…/导出 + 图层开关）；文件选择器 + 全窗口拖拽（拖入两个文件自动对比）；节点 = op 名 + 输出 tensor 名 + 边 tensor 标签；**点击节点就地展开详情卡（HTML overlay，含 tensors/attributes/weights/字段级变化/性能），再点或点空白收起**；右侧属性抽屉；对比对话框；图例浮窗。
+- 浏览器实测：文件链路加载（DataTransfer 注入 File 走完整 base64→API→渲染）✓；节点展开显示 tensors+weights ✓；对比模式 B 侧 LeakyRelu 展开显示字段级变化与置信度（按需 /api/model/nodes 拉取）✓；再次点击收起 ✓；空白点击收起当前侧 ✓。

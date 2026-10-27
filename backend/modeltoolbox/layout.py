@@ -221,6 +221,7 @@ def layout_single(ir: GraphIR) -> LayoutResult:
         res.edge_points[e.id] = {
             "src": [sb.x + sb.w, sb.y + sb.h / 2],
             "dst": [db.x, db.y + db.h / 2],
+            "tensor": e.tensor,
         }
     return res
 
@@ -346,6 +347,7 @@ def layout_diff_pair(a: GraphIR, b: GraphIR, matches: List[Any]) -> Tuple[Layout
                 out.edge_points[e.id] = {
                     "src": [sb.x + sb.w, sb.y + sb.h / 2],
                     "dst": [db.x, db.y + db.h / 2],
+                    "tensor": e.tensor,
                 }
         return out
 
