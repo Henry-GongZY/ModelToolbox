@@ -1,6 +1,10 @@
-// ModelToolbox frontend — Netron-inspired interaction:
-// file-picker / drag-and-drop loading, in-place expandable node details,
-// edge tensor names, properties drawer. Vanilla ES modules, no build step.
+// ModelToolbox frontend — canvas-first, no toolbars.
+// Interaction model:
+//   - welcome card on empty canvas (open / compare / pytorch, drag & drop)
+//   - ⌘/Ctrl+K command palette: every action + fuzzy node search & jump
+//   - right-click context menus (canvas / node)
+//   - floating layer panel (bottom-right): layer toggles + legend
+//   - in-place expandable node details (click), properties drawer, status bar
 import { apiPost, apiGet, apiDownload } from "./api.js";
 import { GraphView } from "./graph.js";
 
@@ -16,7 +20,8 @@ const state = {
   },
   pytorch: { result: null, view: "overview" },
   detailCache: { a: {}, b: {} },
-  pendingCompare: { a: null, b: null }, // chosen files before running the diff
+  pendingCompare: { a: null, b: null },
+  layerPanelClosed: false,
 };
 
 // ---------- tiny helpers ----------
@@ -27,7 +32,10 @@ function toast(msg, ms = 2600) {
   clearTimeout(t._h);
   t._h = setTimeout(() => t.classList.add("hidden"), ms);
 }
-function setStatus(el, msg, cls = "") { el.textContent = msg || ""; el.className = "status " + cls; }
+function setStatusText(msg, cls = "") {
+  $("sb-left").textContent = msg;
+  $("sb-left").style.color = cls === "err" ? "var(--removed)" : cls === "ok" ? "var(--added)" : "";
+}
 function esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -84,13 +92,14 @@ const ptGraph = new GraphView($("pt-graph"), {
   onEmptyClick: () => { ptGraph.collapseAll(); showPtDetail(null); },
   detailHTML: (id) => ptDetailHTML(id),
 });
+const activeGraph = () =>
+  state.mode === "compare" ? graphB : state.mode === "pytorch" ? ptGraph : browseGraph;
 
-// synced view (compare)
 let syncing = false;
 graphA.opts.onTransform = (g) => mirrorTransform(graphA, graphB);
 graphB.opts.onTransform = (g) => mirrorTransform(graphB, graphA);
 function mirrorTransform(src, dst) {
-  if (!$("sync-view").checked || syncing) return;
+  if (!$("sync-view") || !$("sync-view").checked || syncing) return;
   syncing = true;
   dst.tx = src.tx; dst.ty = src.ty; dst.scale = src.scale;
   dst.viewport.setAttribute("transform", `translate(${dst.tx} ${dst.ty}) scale(${dst.scale})`);
@@ -99,23 +108,34 @@ function mirrorTransform(src, dst) {
   syncing = false;
 }
 
-// ---------- mode ----------
+// ---------- mode & welcome ----------
+function hasContent() {
+  return state.mode === "compare" ? !!state.compare.diffId
+    : state.mode === "pytorch" ? !!(state.pytorch.result && state.pytorch.result.ok)
+    : !!state.browse.modelId;
+}
+function refreshWelcome() {
+  const show = !hasContent() && state.mode !== "pytorch";
+  $("welcome").classList.toggle("hidden", !show);
+  $("statusbar").style.visibility = show ? "hidden" : "visible";
+  $("layer-panel").classList.toggle("hidden", show || state.layerPanelClosed);
+}
 function setMode(mode) {
   state.mode = mode;
-  $("mode-indicator").textContent =
-    { browse: "单模型浏览", compare: "双模型对比", pytorch: "PyTorch 层级" }[mode];
   $("view-graph").classList.toggle("hidden", mode === "pytorch");
   $("view-pytorch").classList.toggle("hidden", mode !== "pytorch");
   $("single-wrap").classList.toggle("hidden", mode !== "browse");
   $("dual-wrap").classList.toggle("hidden", mode !== "compare");
   $("compare-header").classList.toggle("hidden", mode !== "compare");
   $("diff-nav").classList.toggle("hidden", mode !== "compare");
-  document.querySelectorAll(".cmp-only").forEach((el) =>
-    el.classList.toggle("hidden", mode !== "compare"));
-  $("btn-export").disabled = !(mode === "compare" && state.compare.diffId) &&
-    !(mode === "browse" && state.browse.profileId);
-  if (mode === "compare") { $("layer-diff").checked = true; }
-  $("legend").classList.toggle("hidden", mode === "pytorch");
+  if (mode === "compare") setLayer("layer-diff", true);
+  $("sb-right").textContent =
+    mode === "compare" ? `对比 · A ${state.compare.nameA} ⇄ B ${state.compare.nameB}`
+    : mode === "pytorch" ? "PyTorch 层级"
+    : state.browse.meta ? `${state.browse.meta.name} · ${state.browse.meta.node_count} 节点`
+    : "";
+  refreshWelcome();
+  refreshLayerPanel();
   refreshLayers();
 }
 
@@ -129,13 +149,18 @@ function fmtShape(vi) {
 function browseDetailHTML(nodeId) {
   const n = state.browse.ir && state.browse.ir.nodes.find((x) => x.id === nodeId);
   if (!n) return "__loading__";
+  return nodeCardHTML(n, null,
+    state.browse.mapped && state.browse.mapped.per_node[nodeId]);
+}
+
+function nodeCardHTML(n, diff, perf) {
   const rows = [];
   for (const t of (n.inputs || []).filter(Boolean)) {
-    const vi = n.input_info[t];
+    const vi = n.input_info && n.input_info[t];
     rows.push(`<tr><td>← ${esc(t)}</td><td>${esc(fmtShape(vi))}</td></tr>`);
   }
   for (const t of (n.outputs || []).filter(Boolean)) {
-    const vi = n.output_info[t];
+    const vi = n.output_info && n.output_info[t];
     rows.push(`<tr><td>→ ${esc(t)}</td><td>${esc(fmtShape(vi))}</td></tr>`);
   }
   let attrRows = "";
@@ -146,7 +171,14 @@ function browseDetailHTML(nodeId) {
   for (const p of n.params || []) {
     paramRows += `<tr><td>${esc(p.name)}</td><td>${esc(p.dtype || "?")} ${esc(JSON.stringify(p.shape))}</td></tr>`;
   }
-  const perf = state.browse.mapped && state.browse.mapped.per_node[nodeId];
+  let chRows = "";
+  for (const c of (diff && diff.changes) || []) {
+    chRows += `<tr><td>${esc(c.field)}</td><td>${esc(JSON.stringify(c.before))} → ${esc(JSON.stringify(c.after))}</td></tr>`;
+  }
+  const diffLine = diff && diff.kind !== "unchanged" && diff.kind !== "ambiguous"
+    ? `<div class="warnline">${esc(diff.explanation)}（置信度 ${diff.confidence}）</div>`
+    : (diff && diff.kind === "ambiguous"
+      ? `<div class="warnline">⚠ 存在多个等价候选，对应关系不确定</div>` : "");
   const perfLine = perf
     ? `<div class="perf">⏱ ${perf.duration_us.toFixed(1)} us · ${(perf.share * 100).toFixed(1)}% · ×${perf.calls}</div>` : "";
   const sg = (n.subgraphs || []).length
@@ -155,48 +187,17 @@ function browseDetailHTML(nodeId) {
     <div class="sec">tensors</div><table>${rows.join("")}</table>
     ${attrRows ? `<div class="sec">attributes</div><table>${attrRows}</table>` : ""}
     ${paramRows ? `<div class="sec">weights</div><table>${paramRows}</table>` : ""}
-    ${sg}${perfLine}`;
+    ${chRows ? `<div class="sec">字段级变化</div><table>${chRows}</table>` : ""}
+    ${diffLine}${sg}${perfLine}`;
 }
 
 function compareDetailHTML(side, nodeId) {
   const cache = state.detailCache[side][nodeId];
   if (!cache) {
-    fetchCompareDetail(side, nodeId); // async fill + rerender if still expanded
+    fetchCompareDetail(side, nodeId);
     return "__loading__";
   }
-  const n = cache;
-  const diff = diffByNode(side)[nodeId];
-  const diffLine = diff && diff.kind !== "unchanged"
-    ? `<div class="warnline">${esc(diff.explanation)}（置信度 ${diff.confidence}）</div>`
-    : (diff && diff.kind === "ambiguous"
-      ? `<div class="warnline">⚠ 存在多个等价候选，对应关系不确定</div>` : "");
-  let chRows = "";
-  for (const c of (diff && diff.changes) || []) {
-    chRows += `<tr><td>${esc(c.field)}</td><td>${esc(JSON.stringify(c.before))} → ${esc(JSON.stringify(c.after))}</td></tr>`;
-  }
-  const rows = [];
-  for (const t of (n.inputs || []).filter(Boolean)) {
-    const vi = n.input_info[t];
-    rows.push(`<tr><td>← ${esc(t)}</td><td>${esc(fmtShape(vi))}</td></tr>`);
-  }
-  for (const t of (n.outputs || []).filter(Boolean)) {
-    const vi = n.output_info[t];
-    rows.push(`<tr><td>→ ${esc(t)}</td><td>${esc(fmtShape(vi))}</td></tr>`);
-  }
-  let attrRows = "";
-  for (const [k, v] of Object.entries(n.attributes || {})) {
-    attrRows += `<tr><td>${esc(k)}</td><td>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`;
-  }
-  let paramRows = "";
-  for (const p of n.params || []) {
-    paramRows += `<tr><td>${esc(p.name)}</td><td>${esc(p.dtype || "?")} ${esc(JSON.stringify(p.shape))}</td></tr>`;
-  }
-  return `<h5><span>${esc(n.display_name)}</span><span class="op-tag">${esc(n.op_type)}</span></h5>
-    <div class="sec">tensors</div><table>${rows.join("")}</table>
-    ${attrRows ? `<div class="sec">attributes</div><table>${attrRows}</table>` : ""}
-    ${paramRows ? `<div class="sec">weights</div><table>${paramRows}</table>` : ""}
-    ${chRows ? `<div class="sec">字段级变化</div><table>${chRows}</table>` : ""}
-    ${diffLine}`;
+  return nodeCardHTML(cache, diffByNode(side)[nodeId], null);
 }
 
 async function fetchCompareDetail(side, nodeId) {
@@ -214,6 +215,7 @@ async function fetchCompareDetail(side, nodeId) {
 }
 
 // ---------- properties drawer ----------
+function openProps() { $("props").classList.remove("hidden"); }
 function showProps(side, nodeId) {
   const drawer = $("props");
   if (!nodeId) { drawer.classList.add("hidden"); return; }
@@ -225,16 +227,14 @@ function showProps(side, nodeId) {
     body.innerHTML = n ? propsForNode(n, state.browse.mapped && state.browse.mapped.per_node[nodeId]) : "";
   } else {
     const cache = state.detailCache[side][nodeId];
-    const diff = diffByNode(side)[nodeId];
     if (!cache) {
       body.innerHTML = "<p>加载中…</p>";
       fetchCompareDetail(side, nodeId).then(() => showProps(side, nodeId));
       return;
     }
-    body.innerHTML = propsForNode(cache, null, diff);
+    body.innerHTML = propsForNode(cache, null, diffByNode(side)[nodeId]);
   }
 }
-
 function propsForNode(n, perf, diff) {
   const perfHtml = perf
     ? kvTable([["耗时 (us)", perf.duration_us.toFixed(1)], ["占比", (perf.share * 100).toFixed(2) + "%"], ["调用", perf.calls]])
@@ -259,10 +259,9 @@ function propsForNode(n, perf, diff) {
     ${(n.params || []).length ? "<h4>权重</h4>" + kvTable(n.params.map((p) => [p.name, `${p.dtype || "?"} ${JSON.stringify(p.shape)}`])) : ""}
     ${perfHtml ? "<h4>性能</h4>" + perfHtml : ""}`;
 }
-
 $("props-close").addEventListener("click", () => $("props").classList.add("hidden"));
 
-// ---------- file loading (Netron style) ----------
+// ---------- model loading (file picker / drag&drop / palette) ----------
 async function openModelFile(file) {
   if (!file) return;
   setStatusText(`加载 ${file.name}…`);
@@ -275,18 +274,21 @@ async function openModelFile(file) {
     const extra = {};
     for (const n of res.ir.nodes) extra[n.id] = { op: n.op_type, outTensors: n.outputs.filter(Boolean) };
     browseGraph.setData(res.layout, extra);
-    renderPropsModel(res.meta);
-    setStatusText(`${res.meta.name} — ${res.meta.node_count} 节点 / ${res.meta.edge_count} 边 (${dt}ms)`);
-    $("sb-right").textContent = `${res.meta.name} · ${(res.meta.file_size_bytes / 1024).toFixed(1)} KB`;
     setMode("browse");
-    refreshLayers();
+    setStatusText(`${res.meta.name} — ${res.meta.node_count} 节点 / ${res.meta.edge_count} 边 (${dt}ms)`);
+    if ((res.meta.warnings || []).length) {
+      toast(`⚠ ${res.meta.warnings.length} 条解析警告（详见模型属性）`, 3400);
+      showModelProps();
+    }
   } catch (e) {
     setStatusText(`加载失败: ${e.message}`, "err");
     toast(`加载失败: ${e.message}`);
   }
 }
 
-function renderPropsModel(meta) {
+function showModelProps() {
+  const meta = state.browse.meta;
+  if (!meta) return;
   openProps();
   $("props-title").textContent = "模型属性";
   $("props-body").innerHTML = kvTable([
@@ -299,32 +301,28 @@ function renderPropsModel(meta) {
     ["输出", meta.outputs.map((v) => `${v.name}${v.shape ? JSON.stringify(v.shape) : " (未知)"}`).join(", ")],
     ["指纹", meta.fingerprints.content ? meta.fingerprints.content.slice(0, 20) + "…" : "—"],
   ]) + ((meta.warnings || []).length
-    ? `<p style="color:var(--ambiguous)">⚠ ${meta.warnings.length} 条警告</p>` : "");
+    ? "<h4>警告</h4>" + meta.warnings.map((w) => `<p style="margin:3px 0;color:var(--ambiguous)">${esc(w)}</p>`).join("")
+    : "");
 }
-function openProps() { $("props").classList.remove("hidden"); }
 
 async function openProfileFile(file, target) {
-  // target: "browse" | "a" | "b"
   try {
     const b64 = await fileToBase64(file);
-    let res, note = "";
+    let res;
     if (target === "browse") {
       if (!state.browse.modelId) { toast("请先打开模型"); return; }
       res = await apiPost("/api/profile/upload", { name: file.name, data_base64: b64, model_id: state.browse.modelId });
       state.browse.profileId = res.profile_id;
       state.browse.mapped = res.mapped;
-      $("layer-heat").checked = true;
-      refreshLayers();
     } else {
       const modelId = target === "a" ? state.compare.aModelId : state.compare.bModelId;
       res = await apiPost("/api/profile/upload", { name: file.name, data_base64: b64, model_id: modelId });
       if (target === "a") state.compare.mappedA = res.mapped;
       else state.compare.mappedB = res.mapped;
-      $("layer-heat").checked = true;
-      refreshLayers();
     }
-    const unmapped = res.mapped.unmapped.length;
-    note = `${file.name}: ${Object.keys(res.mapped.per_node).length} 映射 / ${unmapped} 未映射` +
+    setLayer("layer-heat", true);
+    refreshLayers();
+    const note = `${file.name}: ${Object.keys(res.mapped.per_node).length} 映射 / ${res.mapped.unmapped.length} 未映射` +
       (res.mapped.model_fingerprint_matched === false ? " · ⚠ 指纹不匹配" : "");
     toast(note, 3400);
     setStatusText(note, res.mapped.model_fingerprint_matched === false ? "err" : "ok");
@@ -333,46 +331,29 @@ async function openProfileFile(file, target) {
   }
 }
 
-// ---------- file pickers & drag&drop ----------
-$("btn-open").addEventListener("click", () => $("file-open").click());
-$("file-open").addEventListener("change", (e) => {
-  if (e.target.files[0]) openModelFile(e.target.files[0]);
-  e.target.value = "";
-});
-$("btn-panel").addEventListener("click", () => {
-  $("props").classList.toggle("hidden");
-});
-$("btn-zoom-fit").addEventListener("click", () => {
-  (state.mode === "compare" ? [graphA, graphB] : state.mode === "pytorch" ? [ptGraph] : [browseGraph])
-    .forEach((g) => g.fitView());
-});
-$("show-tensornames").addEventListener("change", (e) => {
-  [browseGraph, graphA, graphB, ptGraph].forEach((g) => {
-    g.opts.showTensorNames = e.target.checked;
-    g._scheduleRender(true);
-  });
-});
+// ---------- compare ----------
+$("w-open").addEventListener("click", () => $("file-open").click());
+$("w-compare").addEventListener("click", () => openCompareDialog());
+$("w-pytorch").addEventListener("click", () => setMode("pytorch"));
 
-// compare dialog
-$("btn-compare").addEventListener("click", () => {
+function openCompareDialog() {
   $("dlg-compare").classList.remove("hidden");
   state.pendingCompare = { a: null, b: null };
   $("pick-a-name").textContent = "未选择";
   $("pick-b-name").textContent = "未选择";
-});
-$("cmp-cancel").addEventListener("click", () => $("dlg-compare").classList.add("hidden"));
-$("pick-a").addEventListener("click", () => $("file-open-b").click());
-$("pick-b").addEventListener("click", () => $("file-open-b").click());
+  setStatus($("cmp-status"), "");
+}
 let pickTarget = null;
-$("pick-a").addEventListener("click", () => { pickTarget = "a"; });
-$("pick-b").addEventListener("click", () => { pickTarget = "b"; });
-$("file-open-b").addEventListener("change", async (e) => {
+$("pick-a").addEventListener("click", () => { pickTarget = "a"; $("file-open-b").click(); });
+$("pick-b").addEventListener("click", () => { pickTarget = "b"; $("file-open-b").click(); });
+$("file-open-b").addEventListener("change", (e) => {
   const f = e.target.files[0];
   e.target.value = "";
   if (!f || !pickTarget) return;
   state.pendingCompare[pickTarget] = f;
   $(`pick-${pickTarget}-name`).textContent = f.name;
 });
+$("cmp-cancel").addEventListener("click", () => $("dlg-compare").classList.add("hidden"));
 $("cmp-run").addEventListener("click", runCompare);
 
 async function runCompare() {
@@ -442,18 +423,19 @@ window.addEventListener("drop", async (e) => {
   const files = [...(e.dataTransfer.files || [])];
   const onnx = files.filter((f) => /\.(onnx|bin)$/i.test(f.name));
   const prof = files.filter((f) => /\.(json|csv|txt)$/i.test(f.name));
-  if (state.mode === "compare" || onnx.length >= 2) {
-    if (onnx.length >= 2) {
-      state.pendingCompare = { a: onnx[0], b: onnx[1] };
-      await runCompareWithFiles(onnx[0], onnx[1]);
-      return;
-    }
+  if (onnx.length >= 2) {
+    await runCompareWithFiles(onnx[0], onnx[1]);
+    return;
   }
   if (onnx.length === 1) { await openModelFile(onnx[0]); return; }
-  if (prof.length && state.mode === "browse") { await openProfileFile(prof[0], "browse"); return; }
-  if (prof.length && state.mode === "compare") {
-    if (prof[0]) await openProfileFile(prof[0], "a");
-    if (prof[1]) await openProfileFile(prof[1], "b");
+  if (prof.length === 1) {
+    const target = state.mode === "compare" ? "a" : "browse";
+    await openProfileFile(prof[0], target);
+    return;
+  }
+  if (prof.length >= 2 && state.mode === "compare") {
+    await openProfileFile(prof[0], "a");
+    await openProfileFile(prof[1], "b");
     return;
   }
   if (files.length) toast("无法识别的文件类型");
@@ -527,9 +509,9 @@ $("diff-prev").addEventListener("click", () => gotoDiff((state.compare.navIdx ==
 $("diff-next").addEventListener("click", () => gotoDiff(state.compare.navIdx + 1));
 
 function renderFoldGroups() {
-  openProps();
   const groups = state.compare.folding.groups;
   if (!groups.length) return;
+  openProps();
   const body = $("props-body");
   const wrap = document.createElement("div");
   wrap.innerHTML = "<h4>公共子图折叠</h4>" + groups.map((g) => `
@@ -599,20 +581,16 @@ async function applyCompareViews() {
   refreshLayers();
 }
 
-// ---------- layers / heat ----------
-function refreshLayers() {
-  if (state.mode === "browse") refreshBrowseStyles();
-  else if (state.mode === "compare") refreshCompareStyles();
-  else ptGraph.setStyles({});
-  $("heat-mode").classList.toggle("hidden", !$("layer-heat").checked);
-  $("tg-diff-wrap").classList.toggle("hidden", state.mode === "pytorch");
-  $("tg-heat-wrap").classList.toggle("hidden", state.mode === "pytorch");
+// ---------- layers & heat ----------
+function getLayer(id) {
+  const el = $(id);
+  return el ? el.checked : false;
 }
-
-$("layer-diff").addEventListener("change", refreshLayers);
-$("layer-heat").addEventListener("change", refreshLayers);
-$("heat-mode").addEventListener("change", refreshLayers);
-$("diff-only").addEventListener("change", refreshLayers);
+function setLayer(id, checked) {
+  const el = $(id);
+  if (el) el.checked = checked;
+}
+$("heat-mode") && $("heat-mode").addEventListener("change", refreshLayers);
 
 function heatStyles(mapped, mode) {
   if (!mapped) return {};
@@ -623,47 +601,93 @@ function heatStyles(mapped, mode) {
   for (const [nid, p] of Object.entries(mapped.per_node)) {
     out[nid] = heatColor(mode === "share" ? p.share : p.duration_us, min, max);
   }
-  updateHeatLabels(min, max, mode);
-  return out;
-}
-function updateHeatLabels(min, max, mode) {
   $("heat-min").textContent = mode === "share" ? `${(min * 100).toFixed(1)}%` : `${min.toFixed(0)}us`;
   $("heat-max").textContent = mode === "share" ? `${(max * 100).toFixed(1)}%` : `${max.toFixed(0)}us`;
+  return out;
 }
 
-function refreshBrowseStyles() {
-  if (!state.browse.ir) return;
-  const heat = $("layer-heat").checked ? heatStyles(state.browse.mapped, $("heat-mode").value) : {};
-  if (!heat || !Object.keys(heat).length) { browseGraph.setStyles({}); return; }
-  const styles = {};
-  for (const [nid, fill] of Object.entries(heat)) styles[nid] = { fill };
-  browseGraph.setStyles(styles);
-  if (!$("layer-heat").checked) { $("heat-min").textContent = "min"; $("heat-max").textContent = "max"; }
-}
-
-function refreshCompareStyles() {
-  if (!state.compare.diff) return;
-  const useDiff = $("layer-diff").checked;
-  const only = $("diff-only").checked;
-  const useHeat = $("layer-heat").checked;
-  const mode = $("heat-mode").value;
-  const heatA = useHeat ? heatStyles(state.compare.mappedA, mode) : {};
-  const heatB = useHeat ? heatStyles(state.compare.mappedB, mode) : {};
-  const stylesA = {}, stylesB = {};
-  for (const nd of state.compare.diff.node_diffs) {
-    const badge = DIFF_BADGE[nd.kind];
-    const style = useDiff && badge ? { cls: badge.cls, badge: badge.letter } : {};
-    if (useDiff && only && nd.kind === "unchanged") style.dim = true;
-    if (nd.a_node_id) stylesA[nd.a_node_id] = style;
-    if (nd.b_node_id) stylesB[nd.b_node_id] = { ...style };
+function refreshLayers() {
+  const mode = getLayer("heat-mode") || "duration";
+  if (state.mode === "browse") {
+    if (!state.browse.ir) { browseGraph.setStyles({}); return; }
+    const heat = getLayer("layer-heat") ? heatStyles(state.browse.mapped, mode) : {};
+    const styles = {};
+    for (const [nid, fill] of Object.entries(heat)) styles[nid] = { fill };
+    browseGraph.setStyles(styles);
+  } else if (state.mode === "compare") {
+    if (!state.compare.diff) return;
+    const useDiff = getLayer("layer-diff");
+    const only = getLayer("diff-only");
+    const useHeat = getLayer("layer-heat");
+    const heatA = useHeat ? heatStyles(state.compare.mappedA, mode) : {};
+    const heatB = useHeat ? heatStyles(state.compare.mappedB, mode) : {};
+    const stylesA = {}, stylesB = {};
+    for (const nd of state.compare.diff.node_diffs) {
+      const badge = DIFF_BADGE[nd.kind];
+      const style = useDiff && badge ? { cls: badge.cls, badge: badge.letter } : {};
+      if (useDiff && only && nd.kind === "unchanged") style.dim = true;
+      if (nd.a_node_id) stylesA[nd.a_node_id] = style;
+      if (nd.b_node_id) stylesB[nd.b_node_id] = { ...style };
+    }
+    for (const [nid, fill] of Object.entries(heatA)) stylesA[nid] = { ...(stylesA[nid] || {}), fill };
+    for (const [nid, fill] of Object.entries(heatB)) stylesB[nid] = { ...(stylesB[nid] || {}), fill };
+    graphA.setStyles(stylesA);
+    graphB.setStyles(stylesB);
+  } else {
+    ptGraph.setStyles({});
   }
-  for (const [nid, fill] of Object.entries(heatA)) stylesA[nid] = { ...(stylesA[nid] || {}), fill };
-  for (const [nid, fill] of Object.entries(heatB)) stylesB[nid] = { ...(stylesB[nid] || {}), fill };
-  graphA.setStyles(stylesA);
-  graphB.setStyles(stylesB);
 }
 
-// ---------- profile file pickers (compare + browse via menu) ----------
+// ---------- floating layer panel ----------
+function refreshLayerPanel() {
+  const panel = $("layer-panel");
+  if (hasContent() && !state.layerPanelClosed) {
+    const mode = state.mode;
+    const rows = [];
+    if (mode === "compare") rows.push(["layer-diff", "Diff 图层", getLayer("layer-diff")]);
+    rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
+    rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
+    if (mode === "compare") {
+      rows.push(["sync-view", "同步平移缩放", getLayer("sync-view") !== false]);
+      rows.push(["diff-only", "仅看差异", getLayer("diff-only")]);
+    }
+    const heatOn = getLayer("layer-heat");
+    $("lp-toggles").innerHTML = rows.map(([id, label, checked]) =>
+      `<label class="lp-toggle"><input type="checkbox" id="${id}" ${checked ? "checked" : ""}> ${esc(label)}</label>`).join("") +
+      (heatOn ? `<label class="lp-toggle" style="color:var(--muted)">着色依据
+        <select id="heat-mode" class="menu-select" style="margin-left:auto">
+          <option value="duration" ${mode === "duration" ? "selected" : ""}>耗时</option>
+          <option value="share" ${mode === "share" ? "selected" : ""}>占比</option>
+        </select></label>` : "");
+    for (const [id, , ] of rows) {
+      const el = $(id);
+      if (el) el.addEventListener("change", () => {
+        if (id === "show-tensornames") {
+          [browseGraph, graphA, graphB, ptGraph].forEach((g) => {
+            g.opts.showTensorNames = el.checked;
+            g._scheduleRender(true);
+          });
+        }
+        refreshLayers();
+      });
+    }
+    const hm = $("heat-mode");
+    if (hm) hm.addEventListener("change", refreshLayers);
+    panel.classList.remove("hidden");
+  } else {
+    panel.classList.add("hidden");
+  }
+}
+$("lp-close").addEventListener("click", () => {
+  state.layerPanelClosed = true;
+  $("layer-panel").classList.add("hidden");
+});
+
+// ---------- file inputs ----------
+$("file-open").addEventListener("change", (e) => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (f) openModelFile(f);
+});
 $("file-profile").addEventListener("change", (e) => {
   const f = e.target.files[0]; e.target.value = "";
   if (f) openProfileFile(f, "browse");
@@ -676,50 +700,319 @@ $("file-profile-b").addEventListener("change", (e) => {
   const f = e.target.files[0]; e.target.value = "";
   if (f) openProfileFile(f, "b");
 });
-document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.metaKey) {
-    if (e.key === "o") { e.preventDefault(); $("btn-compare").classList.contains("!hidden") || $("dlg-compare").classList.contains("hidden") ? $("file-open").click() : null; }
+
+// ---------- context menu ----------
+function closeCtxMenu() { $("ctx-menu").classList.add("hidden"); }
+function openCtxMenu(x, y, items) {
+  const menu = $("ctx-menu");
+  menu.innerHTML = items.map((it) => {
+    if (it === "-") return `<div class="ctx-sep"></div>`;
+    if (it.checkbox) {
+      return `<label class="ctx-item"><input type="checkbox" data-action="${esc(it.action)}" ${it.checked ? "checked" : ""}> ${esc(it.label)}</label>`;
+    }
+    return `<div class="ctx-item ${it.disabled ? "disabled" : ""}" data-action="${esc(it.action)}">
+      <span class="pi-icon">${esc(it.icon || "")}</span>${esc(it.label)}
+      ${it.hint ? `<span class="ci-hint">${esc(it.hint)}</span>` : ""}</div>`;
+  }).join("");
+  menu.classList.remove("hidden");
+  menu.style.left = "0px"; menu.style.top = "0px";
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
+  menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
+  menu.querySelectorAll("[data-action]").forEach((el) => {
+    el.addEventListener("click", (ev) => {
+      const act = el.dataset.action;
+      closeCtxMenu();
+      runAction(act);
+    });
+    el.addEventListener("change", (ev) => {
+      if (el.dataset && el.dataset.action && el.type === "checkbox") {
+        runAction("toggle:" + el.dataset.action.replace("toggle:", ""), el.checked);
+      }
+    });
+  });
+}
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#ctx-menu")) closeCtxMenu();
+});
+document.addEventListener("contextmenu", (e) => {
+  if (e.target.closest("#props") || e.target.closest("#pt-sidebar") ||
+      e.target.closest(".detail-card") || e.target.closest(".modal") ||
+      e.target.closest("#palette")) return;
+  e.preventDefault();
+  if (state.mode === "pytorch") { openCtxMenu(e.clientX, e.clientY, pytorchMenuItems()); return; }
+  const nodeEl = e.target.closest(".node-box");
+  if (nodeEl && state.mode === "browse") {
+    openCtxMenu(e.clientX, e.clientY, browseNodeMenuItems(nodeEl.getAttribute("data-id")));
+  } else if (nodeEl && state.mode === "compare") {
+    const side = e.target.closest("#cmp-graph-a") ? "a" : "b";
+    openCtxMenu(e.clientX, e.clientY, compareNodeMenuItems(side, nodeEl.getAttribute("data-id")));
+  } else {
+    openCtxMenu(e.clientX, e.clientY, canvasMenuItems());
   }
 });
 
-// ---------- export ----------
-$("btn-export").addEventListener("click", (e) => {
-  e.stopPropagation();
-  const canProfile = state.mode === "browse" && state.browse.profileId;
-  const canDiff = state.mode === "compare" && state.compare.diffId;
-  $("export-menu").querySelectorAll("button").forEach((b) => {
-    const fmt = b.dataset.fmt;
-    b.style.display = (fmt.startsWith("p") && !canProfile) || (!fmt.startsWith("p") && !canDiff)
-      ? "none" : "";
-  });
-  $("export-menu").classList.toggle("hidden");
-});
-document.addEventListener("click", (e) => {
-  if (!e.target.closest("#export-menu")) $("export-menu").classList.add("hidden");
-});
-$("export-menu").addEventListener("click", async (e) => {
-  const fmt = e.target.dataset && e.target.dataset.fmt;
-  if (!fmt) return;
-  $("export-menu").classList.add("hidden");
+function canvasMenuItems() {
+  const items = [
+    { action: "open", icon: "📄", label: "打开模型…", hint: "O" },
+    { action: "compare", icon: "⇆", label: "对比两个模型…", hint: "D" },
+    { action: "pytorch", icon: "🐍", label: "PyTorch 项目…" },
+    "-",
+    { action: "fit", icon: "⤢", label: "适合视图", hint: "F" },
+    { action: "props-model", icon: "ⓘ", label: "模型属性", disabled: !state.browse.meta },
+    { action: "load-profile", icon: "⏱", label: "加载 Profile…", disabled: !state.browse.modelId },
+    "-",
+    { action: "panel-layers", icon: "▤", label: "图层面板" },
+    { action: "palette", icon: "⌘", label: "命令面板", hint: "⌘K" },
+  ];
+  if (state.mode === "compare" && state.compare.diffId) {
+    items.push("-");
+    items.push({ action: "export:json", icon: "↧", label: "导出 Diff JSON" });
+    items.push({ action: "export:csv", icon: "↧", label: "导出 Diff CSV" });
+    items.push({ action: "export:md", icon: "↧", label: "导出 Diff Markdown" });
+    items.push({ action: "export:html", icon: "↧", label: "导出 Diff HTML" });
+  }
+  if (state.mode === "browse" && state.browse.profileId) {
+    items.push({ action: "export:pjson", icon: "↧", label: "导出 Profile JSON" });
+    items.push({ action: "export:pcsv", icon: "↧", label: "导出 Profile CSV" });
+  }
+  return items;
+}
+
+function browseNodeMenuItems(nodeId) {
+  const n = state.browse.ir && state.browse.ir.nodes.find((x) => x.id === nodeId);
+  return [
+    { action: "toggle-node", icon: "▦", label: "展开 / 收起详情" },
+    { action: "copy-node", icon: "⧉", label: "复制节点信息",
+      disabled: !n },
+    "-",
+    { action: "fit", icon: "⤢", label: "适合视图", hint: "F" },
+    { action: "palette", icon: "⌘", label: "搜索节点 / 命令", hint: "⌘K" },
+  ];
+}
+
+function compareNodeMenuItems(side, nodeId) {
+  const other = side === "a" ? "b" : "a";
+  const partnerId = findPartner(side, nodeId);
+  return [
+    { action: "toggle-node", icon: "▦", label: "展开 / 收起详情" },
+    { action: `locate:${other}:${partnerId || ""}`, icon: "⇥", label: `在 ${other.toUpperCase()} 侧定位`,
+      disabled: !partnerId },
+    { action: "copy-node", icon: "⧉", label: "复制节点信息" },
+    "-",
+    { action: "fit", icon: "⤢", label: "适合视图", hint: "F" },
+  ];
+}
+
+function pytorchMenuItems() {
+  return [
+    { action: "pt-toggle", icon: "▦", label: "概览 / 详细切换" },
+    { action: "pt-back", icon: "←", label: "返回模型画布" },
+    "-",
+    { action: "fit", icon: "⤢", label: "适合视图", hint: "F" },
+  ];
+}
+
+function findPartner(side, nodeId) {
+  const m = state.compare.match;
+  if (!m) return null;
+  for (const match of m.matches) {
+    if (side === "a" && match.a_node_id === nodeId) return match.b_node_id;
+    if (side === "b" && match.b_node_id === nodeId) return match.a_node_id;
+  }
+  return null;
+}
+
+function copyText(text) {
+  navigator.clipboard && navigator.clipboard.writeText(text).then(
+    () => toast("已复制到剪贴板"),
+    () => toast("复制失败"));
+}
+
+function runAction(action, checked) {
+  if (action.startsWith("toggle:")) {
+    const key = action.slice(7);
+    if (key === "layer-diff" || key === "layer-heat" || key === "diff-only") refreshLayers();
+    return;
+  }
+  switch (action) {
+    case "open": $("file-open").click(); break;
+    case "compare": openCompareDialog(); break;
+    case "pytorch": setMode("pytorch"); break;
+    case "fit": [browseGraph, graphA, graphB, ptGraph].forEach((g) =>
+      document.body.contains(g.container) && !g.container.closest(".hidden") && g.fitView()); break;
+    case "props-model": showModelProps(); break;
+    case "load-profile": $("file-profile").click(); break;
+    case "panel-layers":
+      state.layerPanelClosed = false;
+      refreshLayerPanel();
+      break;
+    case "palette": openPalette(); break;
+    case "toggle-node": {
+      const g = activeGraph();
+      if (g.selected) g.toggleExpand(g.selected);
+      break;
+    }
+    case "copy-node": {
+      const g = activeGraph();
+      if (g.selected) {
+        const n = state.browse.ir && state.browse.ir.nodes.find((x) => x.id === g.selected);
+        copyText(n ? JSON.stringify(n, null, 2) : g.selected);
+      }
+      break;
+    }
+    case "pt-toggle": {
+      if (!state.pytorch.result) { toast("请先加载 PyTorch 项目"); break; }
+      state.pytorch.view = state.pytorch.view === "overview" ? "detail" : "overview";
+      renderPtGraph();
+      break;
+    }
+    case "pt-back": setMode(state.browse.modelId ? "browse" : "browse"); break;
+    default:
+      if (action.startsWith("export:")) exportAs(action.slice(7));
+      else if (action.startsWith("locate:")) {
+        const [, side, id] = action.split(":");
+        if (id) {
+          const g = side === "a" ? graphA : graphB;
+          g.focusNode(id); g.selectExternal(id);
+        } else toast("该节点在另一侧没有可信对应（或为歧义）");
+      }
+  }
+}
+
+async function exportAs(fmt) {
   try {
     if (fmt.startsWith("p")) {
+      if (!state.browse.profileId) { toast("当前没有已映射的 profile"); return; }
       await apiDownload("/api/export/profile", { profile_id: state.browse.profileId, format: fmt.slice(1) },
         `profile_report.${fmt.slice(1)}`);
     } else {
+      if (!state.compare.diffId) { toast("当前没有对比结果"); return; }
       await apiDownload("/api/export/diff", { diff_id: state.compare.diffId, format: fmt }, `diff_report.${fmt}`);
     }
     toast("已导出");
   } catch (err) { toast(`导出失败: ${err.message}`); }
+}
+
+// ---------- command palette ----------
+let paletteSel = 0;
+let paletteEntries = [];
+
+function paletteActions() {
+  const acts = [
+    { icon: "📄", label: "打开模型…", hint: "O", run: () => $("file-open").click() },
+    { icon: "⇆", label: "对比两个模型…", hint: "D", run: openCompareDialog },
+    { icon: "🐍", label: "PyTorch 项目…", run: () => setMode("pytorch") },
+    { icon: "⤢", label: "适合视图", hint: "F", run: () => runAction("fit") },
+    { icon: "⌘", label: "命令面板帮助（↑↓ 选择，↵ 执行）", run: () => {} },
+  ];
+  if (state.browse.meta) acts.push({ icon: "ⓘ", label: "模型属性", run: showModelProps });
+  if (state.browse.modelId) acts.push({ icon: "⏱", label: "加载 Profile…", run: () => $("file-profile").click() });
+  if (state.mode === "compare" && state.compare.diffId) {
+    for (const f of ["json", "csv", "md", "html"]) {
+      acts.push({ icon: "↧", label: `导出 Diff ${f.toUpperCase()}`, run: () => exportAs(f) });
+    }
+    acts.push({ icon: "▤", label: "差异摘要", run: renderDiffSummary });
+  }
+  if (state.browse.profileId) {
+    acts.push({ icon: "↧", label: "导出 Profile JSON", run: () => exportAs("pjson") });
+  }
+  return acts;
+}
+
+function paletteNodeMatches(q) {
+  const out = [];
+  if (state.mode === "browse" && state.browse.ir) {
+    for (const n of state.browse.ir.nodes) {
+      const hay = `${n.id} ${n.display_name} ${n.op_type} ${(n.inputs || []).join(" ")} ${(n.outputs || []).join(" ")}`.toLowerCase();
+      if (hay.includes(q)) out.push({ icon: "▪", label: `${n.display_name}`, sub: `${n.op_type}`, run: () => {
+        setMode("browse");
+        browseGraph.focusNode(n.id); browseGraph.selectExternal(n.id);
+        if (!browseGraph.expanded.has(n.id)) browseGraph.toggleExpand(n.id);
+        showProps("browse", n.id);
+      }});
+    }
+  } else if (state.mode === "compare") {
+    for (const [id, n] of Object.entries(state.compare.nodesA)) {
+      if (`${id} ${n.display} ${n.op}`.toLowerCase().includes(q))
+        out.push({ icon: "🅐", label: `${n.display || id}`, sub: `${n.op} · A 侧`, run: () => {
+          graphA.focusNode(id); graphA.selectExternal(id);
+          if (!graphA.expanded.has(id)) graphA.toggleExpand(id);
+          showProps("a", id);
+        }});
+    }
+    for (const [id, n] of Object.entries(state.compare.nodesB)) {
+      if (`${id} ${n.display} ${n.op}`.toLowerCase().includes(q))
+        out.push({ icon: "🅑", label: `${n.display || id}`, sub: `${n.op} · B 侧`, run: () => {
+          graphB.focusNode(id); graphB.selectExternal(id);
+          if (!graphB.expanded.has(id)) graphB.toggleExpand(id);
+          showProps("b", id);
+        }});
+    }
+  } else if (state.mode === "pytorch" && state.pytorch.result && state.pytorch.result.ok) {
+    for (const n of flattenClient(state.pytorch.result.module_tree, 0)) {
+      if (`${n.path} ${n.class_name}`.toLowerCase().includes(q))
+        out.push({ icon: "▪", label: `${n.class_name}`, sub: n.path || "(root)", run: () => {
+          ptGraph.focusNode(n.path || "__root__"); ptGraph.selectExternal(n.path || "__root__");
+        }});
+    }
+  }
+  return out.slice(0, 40);
+}
+
+function openPalette(prefill = "") {
+  $("palette").classList.remove("hidden");
+  $("palette-input").value = prefill;
+  $("palette-input").focus();
+  renderPalette();
+}
+function closePalette() { $("palette").classList.add("hidden"); }
+
+function renderPalette() {
+  const q = $("palette-input").value.trim().toLowerCase();
+  const acts = paletteActions().filter((a) => !q || a.label.toLowerCase().includes(q));
+  const nodes = q ? paletteNodeMatches(q) : [];
+  paletteEntries = [
+    ...acts.map((a) => ({ ...a, kind: "act" })),
+    ...nodes.map((n) => ({ ...n, kind: "node" })),
+  ];
+  paletteSel = Math.min(paletteSel, Math.max(0, paletteEntries.length - 1));
+  $("palette-list").innerHTML = paletteEntries.map((e, i) => `
+    <div class="palette-item ${i === paletteSel ? "sel" : ""}" data-i="${i}">
+      <span class="pi-icon">${e.icon}</span>
+      <span>${esc(e.label)} ${e.sub ? `<span class="pi-sub">— ${esc(e.sub)}</span>` : ""}</span>
+      ${e.hint ? `<span class="pi-hint">${esc(e.hint)}</span>` : ""}
+    </div>`).join("") || `<div class="palette-item"><span class="pi-sub">无匹配</span></div>`;
+  $("palette-list").querySelectorAll(".palette-item[data-i]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const entry = paletteEntries[parseInt(el.dataset.i, 10)];
+      closePalette();
+      entry.run();
+    });
+  });
+  const sel = $("palette-list").querySelector(".palette-item.sel");
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+}
+
+$("palette-input").addEventListener("input", () => { paletteSel = 0; renderPalette(); });
+$("palette-input").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") { e.preventDefault(); paletteSel = Math.min(paletteSel + 1, paletteEntries.length - 1); renderPalette(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); paletteSel = Math.max(paletteSel - 1, 0); renderPalette(); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    const entry = paletteEntries[paletteSel];
+    if (entry) { closePalette(); entry.run(); }
+  }
+});
+$("palette").addEventListener("click", (e) => {
+  if (e.target === $("palette")) closePalette();
 });
 
 // ---------- pytorch ----------
-$("btn-pytorch").addEventListener("click", () => setMode("pytorch"));
 $("pt-load").addEventListener("click", loadPytorch);
-$("pt-view-toggle").addEventListener("click", () => {
-  if (!state.pytorch.result) { toast("请先加载 PyTorch 项目"); return; }
-  state.pytorch.view = state.pytorch.view === "overview" ? "detail" : "overview";
-  renderPtGraph();
-});
+$("pt-view-toggle").addEventListener("click", () => runAction("pt-toggle"));
+$("pt-back").addEventListener("click", () => runAction("pt-back"));
 
 function parseLeafRules(text) {
   return text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
@@ -748,6 +1041,8 @@ async function loadPytorch() {
       ? `已加载模块树 (${countModules(res.module_tree)} 模块) · ⚠ FX 追踪失败，仅模块树: ${res.fx_error}`
       : `已加载模块树 (${countModules(res.module_tree)} 模块) · FX 算子图已捕获`;
     setStatus($("pt-status"), msg, res.degraded ? "err" : "ok");
+    refreshWelcome();
+    refreshLayerPanel();
     renderPtTree();
     renderPtGraph();
   } catch (e) {
@@ -789,7 +1084,7 @@ function ptLayout() {
   const res = state.pytorch.result;
   if (!res || !res.ok) return null;
   const overview = state.pytorch.view === "overview";
-  const boxes = {}; const extra = {}; const edges = {};
+  const boxes = {}; const edges = {};
   let y = 0;
   const NODE_W = 190, NODE_H = 40, XG = 64, YG = 18;
   function walk(node, depth) {
@@ -797,7 +1092,6 @@ function ptLayout() {
     const collapsed = overview && (node.is_leaf || !(node.children || []).length);
     boxes[path] = { node_id: path, x: depth * (NODE_W + XG), y: y * (NODE_H + YG),
       w: NODE_W, h: NODE_H, kind: "node", label: node.class_name };
-    extra[path] = { op: `${node.param_count} params`, outTensors: [] };
     y += 1;
     if (collapsed) return;
     for (const c of node.children || []) {
@@ -818,9 +1112,9 @@ function ptLayout() {
 function renderPtGraph() {
   const layout = ptLayout();
   if (!layout) return;
-  ptGraph.setData(layout, {});
-  for (const id in layout.boxes) ptGraph.nodeExtra[id] = layout.boxes[id].label ? { op: layout.boxes[id].label } : {};
-  ptGraph._scheduleRender(true);
+  const extra = {};
+  for (const id in layout.boxes) extra[id] = { op: layout.boxes[id].label, outTensors: [] };
+  ptGraph.setData(layout, extra);
 }
 function ptDetailHTML(path) {
   const res = state.pytorch.result;
@@ -841,18 +1135,25 @@ function showPtDetail(path) {
   $("props-body").innerHTML = ptDetailHTML(path) || "";
 }
 
-// ---------- misc ----------
-function setStatusText(msg, cls = "") {
-  $("sb-left").textContent = msg;
-  $("sb-left").style.color = cls === "err" ? "var(--removed)" : cls === "ok" ? "var(--added)" : "";
-}
-
+// ---------- keyboard shortcuts ----------
 window.addEventListener("keydown", (e) => {
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    openPalette();
+    return;
+  }
   if (e.key === "Escape") {
     [browseGraph, graphA, graphB, ptGraph].forEach((g) => g.collapseAll());
+    closeCtxMenu();
     $("dlg-compare").classList.add("hidden");
-    $("export-menu").classList.add("hidden");
+    closePalette();
+    return;
   }
+  if (inField || e.metaKey || e.ctrlKey) return;
+  if (e.key === "o" || e.key === "O") { e.preventDefault(); $("file-open").click(); }
+  else if (e.key === "d" || e.key === "D") { e.preventDefault(); openCompareDialog(); }
+  else if (e.key === "f" || e.key === "F") { runAction("fit"); }
 });
 
 // ---------- init ----------
@@ -860,7 +1161,7 @@ window.addEventListener("keydown", (e) => {
   setMode("browse");
   try {
     const h = await apiGet("/api/health");
-    $("sb-right").textContent = h.torch_available ? "torch 可用" : "torch 不可用（PyTorch 功能受限）";
+    $("sb-right").textContent = h.torch_available ? "" : "torch 不可用（PyTorch 功能受限）";
   } catch (e) {
     $("sb-right").textContent = "无法连接后端服务";
   }

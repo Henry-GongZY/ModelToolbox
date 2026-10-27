@@ -8,49 +8,21 @@
 </head>
 <body>
 <input type="file" id="file-open" accept=".onnx,.bin" class="hidden-file">
-<input type="file" id="file-profile" accept=".json,.csv,.txt" class="hidden-file">
 <input type="file" id="file-open-b" accept=".onnx,.bin" class="hidden-file">
+<input type="file" id="file-profile" accept=".json,.csv,.txt" class="hidden-file">
 <input type="file" id="file-profile-a" accept=".json,.csv,.txt" class="hidden-file">
 <input type="file" id="file-profile-b" accept=".json,.csv,.txt" class="hidden-file">
 
-<header id="menubar">
-  <div class="menu-left">
-    <span class="logo">ModelToolbox</span>
-    <button id="btn-open" class="menu-item" title="打开 ONNX 模型 (Ctrl+O)">打开模型…</button>
-    <button id="btn-compare" class="menu-item" title="选择两个模型进行结构对比">对比…</button>
-    <button id="btn-pytorch" class="menu-item">PyTorch…</button>
-    <button id="btn-export" class="menu-item" disabled>导出</button>
-  </div>
-  <div class="menu-center" id="mode-indicator">单模型浏览</div>
-  <div class="menu-right">
-    <label class="menu-item toggle" id="tg-diff-wrap" title="结构差异图层"><input type="checkbox" id="layer-diff"> Diff</label>
-    <label class="menu-item toggle" id="tg-heat-wrap" title="性能热力图图层"><input type="checkbox" id="layer-heat"> 热力</label>
-    <select id="heat-mode" class="menu-select hidden" title="热力着色依据">
-      <option value="duration">耗时</option>
-      <option value="share">占比</option>
-    </select>
-    <label class="menu-item toggle" id="tg-tensornames" title="在边上显示 tensor 名"><input type="checkbox" id="show-tensornames" checked> Tensor 名</label>
-    <label class="menu-item toggle cmp-only hidden" id="tg-sync-wrap"><input type="checkbox" id="sync-view" checked> 同步</label>
-    <label class="menu-item toggle cmp-only hidden" id="tg-only-wrap"><input type="checkbox" id="diff-only"> 仅看差异</label>
-    <button id="btn-zoom-fit" class="menu-item icon" title="适合视图">⤢</button>
-    <button id="btn-panel" class="menu-item icon" title="模型属性面板">ⓘ</button>
-  </div>
-</header>
-
 <main id="main">
-  <!-- browse / compare share the same canvas shell -->
+  <!-- graph views -->
   <section id="view-graph" class="view">
     <div id="compare-header" class="hidden">
       <div class="cmp-tab" id="cmp-head-a">A: <span>—</span></div>
       <div class="cmp-tab" id="cmp-head-b">B: <span>—</span></div>
     </div>
     <div id="dual-wrap" class="hidden">
-      <div class="graph-pane">
-        <div id="cmp-graph-a" class="graph"></div>
-      </div>
-      <div class="graph-pane">
-        <div id="cmp-graph-b" class="graph"></div>
-      </div>
+      <div class="graph-pane"><div id="cmp-graph-a" class="graph"></div></div>
+      <div class="graph-pane"><div id="cmp-graph-b" class="graph"></div></div>
     </div>
     <div id="single-wrap" class="graph-pane full">
       <div id="browse-graph" class="graph"></div>
@@ -65,26 +37,25 @@
   <!-- pytorch view -->
   <section id="view-pytorch" class="view hidden">
     <aside id="pt-sidebar" class="sidebar">
-      <h3>加载本地 PyTorch 项目</h3>
+      <h3>PyTorch 项目</h3>
       <label>项目目录</label>
       <input type="text" id="pt-project" placeholder="/abs/path/to/project">
       <label>模块路径</label>
       <input type="text" id="pt-import" placeholder="mymodels">
       <label>类名</label>
       <input type="text" id="pt-class" placeholder="Net">
-      <label>Leaf 规则（class:Name 或 path:pattern，每行一条）</label>
+      <label>Leaf 规则（class:Name 或 path:pattern）</label>
       <textarea id="pt-leaves" rows="3" placeholder="class:CustomBlock"></textarea>
       <div class="row">
         <button id="pt-load" class="primary">加载</button>
         <button id="pt-view-toggle">概览/详细</button>
+        <button id="pt-back">返回画布</button>
       </div>
       <div id="pt-status" class="status"></div>
       <p class="note">⚠ 仅导入你信任的本地代码。子进程隔离 + 超时不是沙箱。</p>
       <div id="pt-tree" class="tree"></div>
     </aside>
-    <div class="graph-pane full">
-      <div id="pt-graph" class="graph"></div>
-    </div>
+    <div class="graph-pane full"><div id="pt-graph" class="graph"></div></div>
   </section>
 
   <!-- right properties drawer -->
@@ -96,6 +67,26 @@
     <div id="props-body" class="props-body"></div>
   </aside>
 </main>
+
+<!-- welcome / empty state -->
+<div id="welcome">
+  <div class="welcome-card">
+    <h1>ModelToolbox</h1>
+    <p class="welcome-sub">本地模型结构差异分析 — 拖入 .onnx 文件，或选择一种开始方式</p>
+    <div class="welcome-actions">
+      <button class="welcome-btn" id="w-open">
+        <span class="wb-icon">📄</span><span><b>打开模型</b><small>浏览计算图与节点详情</small></span>
+      </button>
+      <button class="welcome-btn" id="w-compare">
+        <span class="wb-icon">⇆</span><span><b>对比两个模型</b><small>结构差异、公共子图、性能对照</small></span>
+      </button>
+      <button class="welcome-btn" id="w-pytorch">
+        <span class="wb-icon">🐍</span><span><b>PyTorch 项目</b><small>浏览 nn.Module 层级</small></span>
+      </button>
+    </div>
+    <p class="welcome-hint">提示：<kbd>⌘/Ctrl</kbd>+<kbd>K</kbd> 命令面板 · <kbd>右键</kbd> 画布菜单 · 文件可随时拖入窗口</p>
+  </div>
+</div>
 
 <!-- compare setup dialog -->
 <div id="dlg-compare" class="modal hidden">
@@ -124,19 +115,37 @@
   </div>
 </div>
 
-<!-- export menu -->
-<div id="export-menu" class="popover hidden">
-  <button data-fmt="json">Diff JSON</button>
-  <button data-fmt="csv">Diff CSV</button>
-  <button data-fmt="md">Diff Markdown</button>
-  <button data-fmt="html">Diff HTML</button>
-  <hr>
-  <button data-fmt="pjson">Profile JSON</button>
-  <button data-fmt="pcsv">Profile CSV</button>
+<!-- command palette -->
+<div id="palette" class="modal hidden" style="align-items:flex-start; background:rgba(30,38,46,.25)">
+  <div class="palette-card">
+    <input type="text" id="palette-input" placeholder="输入命令或搜索节点…  (打开、对比、导出、图层、节点名…)">
+    <div id="palette-list" class="palette-list"></div>
+    <div class="palette-foot"><kbd>↑↓</kbd> 选择 · <kbd>↵</kbd> 执行 · <kbd>Esc</kbd> 关闭</div>
+  </div>
+</div>
+
+<!-- context menu -->
+<div id="ctx-menu" class="hidden"></div>
+
+<!-- layer panel (bottom-right floating) -->
+<div id="layer-panel" class="hidden">
+  <div class="lp-head"><span>图层与图例</span><button id="lp-close">✕</button></div>
+  <div class="lp-toggles" id="lp-toggles"></div>
+  <div class="lp-legend">
+    <div class="legend-item"><span class="swatch sw-unchanged"></span>结构相同</div>
+    <div class="legend-item"><span class="swatch sw-added"></span>新增 (B 独有)</div>
+    <div class="legend-item"><span class="swatch sw-removed"></span>删除 (A 独有)</div>
+    <div class="legend-item"><span class="swatch sw-modified"></span>修改</div>
+    <div class="legend-item"><span class="swatch sw-ambiguous"></span>匹配不确定</div>
+    <div class="heat-legend">
+      <div class="heat-scale"><span class="h0"></span><span class="h1"></span><span class="h2"></span><span class="h3"></span><span class="h4"></span></div>
+      <div class="heat-labels"><span id="heat-min">min</span><span>热力</span><span id="heat-max">max</span></div>
+    </div>
+  </div>
 </div>
 
 <footer id="statusbar">
-  <span id="sb-left">就绪 — 打开模型或拖入 .onnx 文件</span>
+  <span id="sb-left">就绪 — 拖入 .onnx 文件，或按 ⌘/Ctrl+K</span>
   <span id="sb-right"></span>
 </footer>
 
@@ -144,18 +153,6 @@
   <div>拖放 .onnx 模型文件以打开<div class="drop-sub">对比模式：一次拖入两个文件</div></div>
 </div>
 <div id="toast" class="hidden"></div>
-<div id="legend" class="hidden">
-  <h4>图例</h4>
-  <div class="legend-item"><span class="swatch sw-unchanged"></span>结构相同</div>
-  <div class="legend-item"><span class="swatch sw-added"></span>新增 (B 独有)</div>
-  <div class="legend-item"><span class="swatch sw-removed"></span>删除 (A 独有)</div>
-  <div class="legend-item"><span class="swatch sw-modified"></span>修改</div>
-  <div class="legend-item"><span class="swatch sw-ambiguous"></span>匹配不确定</div>
-  <div class="heat-legend">
-    <div class="heat-scale"><span class="h0"></span><span class="h1"></span><span class="h2"></span><span class="h3"></span><span class="h4"></span></div>
-    <div class="heat-labels"><span id="heat-min">min</span><span>热力</span><span id="heat-max">max</span></div>
-  </div>
-</div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

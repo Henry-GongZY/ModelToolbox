@@ -48,3 +48,15 @@
 - 后端：新增 `/api/model/upload`、`/api/profile/upload`（base64 上传）、`/api/model/nodes`（按需节点详情）、`/api/diff` 支持 data_a/data_b 上传字节；layout edge_points 附带 tensor 名；diff 响应附轻量 nodes_a/nodes_b 摘要。测试 92→94。
 - 前端重写：Netron 式菜单栏（打开模型…/对比…/PyTorch…/导出 + 图层开关）；文件选择器 + 全窗口拖拽（拖入两个文件自动对比）；节点 = op 名 + 输出 tensor 名 + 边 tensor 标签；**点击节点就地展开详情卡（HTML overlay，含 tensors/attributes/weights/字段级变化/性能），再点或点空白收起**；右侧属性抽屉；对比对话框；图例浮窗。
 - 浏览器实测：文件链路加载（DataTransfer 注入 File 走完整 base64→API→渲染）✓；节点展开显示 tensors+weights ✓；对比模式 B 侧 LeakyRelu 展开显示字段级变化与置信度（按需 /api/model/nodes 拉取）✓；再次点击收起 ✓；空白点击收起当前侧 ✓。
+
+## 无工具栏交互重构（2026-10-28，用户反馈驱动）
+
+用户要求完全去掉工具栏，重新设计交互。落地模型（全部浏览器实测）：
+- 空状态画布欢迎卡（打开模型/对比两个模型/PyTorch 项目）+ 快捷键提示；加载后自动消失。
+- ⌘/Ctrl+K 命令面板：全部动作（打开/对比/导出/适合视图/属性）+ 节点模糊搜索，回车跳转并就地展开详情卡（browse/compare A·B/pytorch 三个上下文）。
+- 右键上下文菜单：画布空白（打开/对比/适合视图 F/模型属性/加载 Profile/图层面板/导出）、节点（展开收起/另一侧定位/复制信息）、PyTorch（概览详细/返回画布）。
+- 图层开关合并进右下角"图层与图例"浮窗（热力/Tensor名/同步/仅看差异 + 图例色带，可关，右键可再开）。
+- 快捷键：O 打开、D 对比、F 适合视图、Esc 收起/关闭、⌘K 面板。
+- 常驻 UI 仅剩：底部状态栏 + 图层面板浮窗（可关）+ 差异导航浮窗（对比模式）。
+- 修复：命令面板跳转后自动展开详情卡；CSS 旧 #legend 块清理。
+- 94/94 测试保持通过。commit: canvas-first UI。
