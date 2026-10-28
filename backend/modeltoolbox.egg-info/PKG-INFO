@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: modeltoolbox
+Version: 0.1.0
+Summary: Local-first model structure diff workbench (ONNX diff, PyTorch hierarchy, profile heatmap)
+Requires-Python: >=3.9
+Requires-Dist: onnx>=1.15
+Requires-Dist: numpy
+Provides-Extra: torch
+Requires-Dist: torch; extra == "torch"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"

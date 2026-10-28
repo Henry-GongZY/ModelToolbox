@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ModelToolbox</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<input type="file" id="file-open" accept=".onnx,.bin" class="hidden-file">
+<input type="file" id="file-open-b" accept=".onnx,.bin" class="hidden-file">
+<input type="file" id="file-profile" accept=".json,.csv,.txt" class="hidden-file">
+<input type="file" id="file-profile-a" accept=".json,.csv,.txt" class="hidden-file">
+<input type="file" id="file-profile-b" accept=".json,.csv,.txt" class="hidden-file">
+
+<main id="main">
+  <!-- graph views -->
+  <section id="view-graph" class="view">
+    <div id="compare-header" class="hidden">
+      <div class="cmp-tab" id="cmp-head-a">A: <span>—</span></div>
+      <div class="cmp-tab" id="cmp-head-b">B: <span>—</span></div>
+    </div>
+    <div id="dual-wrap" class="hidden">
+      <div class="graph-pane"><div id="cmp-graph-a" class="graph"></div></div>
+      <div class="graph-pane"><div id="cmp-graph-b" class="graph"></div></div>
+    </div>
+    <div id="single-wrap" class="graph-pane full">
+      <div id="browse-graph" class="graph"></div>
+    </div>
+    <div id="diff-nav" class="hidden">
+      <button id="diff-prev" title="上一个差异">◀</button>
+      <span id="diff-nav-pos">0/0</span>
+      <button id="diff-next" title="下一个差异">▶</button>
+    </div>
+  </section>
+
+  <!-- pytorch view -->
+  <section id="view-pytorch" class="view hidden">
+    <aside id="pt-sidebar" class="sidebar">
+      <h3>PyTorch 项目</h3>
+      <label>项目目录</label>
+      <input type="text" id="pt-project" placeholder="/abs/path/to/project">
+      <label>模块路径</label>
+      <input type="text" id="pt-import" placeholder="mymodels">
+      <label>类名</label>
+      <input type="text" id="pt-class" placeholder="Net">
+      <label>Leaf 规则（class:Name 或 path:pattern）</label>
+      <textarea id="pt-leaves" rows="3" placeholder="class:CustomBlock"></textarea>
+      <div class="row">
+        <button id="pt-load" class="primary">加载</button>
+        <button id="pt-view-toggle">概览/详细</button>
+        <button id="pt-back">返回画布</button>
+      </div>
+      <div id="pt-status" class="status"></div>
+      <p class="note">⚠ 仅导入你信任的本地代码。子进程隔离 + 超时不是沙箱。</p>
+      <div id="pt-tree" class="tree"></div>
+    </aside>
+    <div class="graph-pane full"><div id="pt-graph" class="graph"></div></div>
+  </section>
+
+  <!-- right properties drawer -->
+  <aside id="props" class="hidden">
+    <div class="props-head">
+      <span id="props-title">属性</span>
+      <button id="props-close">✕</button>
+    </div>
+    <div id="props-body" class="props-body"></div>
+  </aside>
+</main>
+
+<!-- welcome / empty state -->
+<div id="welcome">
+  <div class="welcome-card">
+    <h1>ModelToolbox</h1>
+    <p class="welcome-sub">本地模型结构差异分析 — 拖入 .onnx 文件，或选择一种开始方式</p>
+    <div class="welcome-actions">
+      <button class="welcome-btn" id="w-open">
+        <span class="wb-icon">📄</span><span><b>打开模型</b><small>浏览计算图与节点详情</small></span>
+      </button>
+      <button class="welcome-btn" id="w-compare">
+        <span class="wb-icon">⇆</span><span><b>对比两个模型</b><small>结构差异、公共子图、性能对照</small></span>
+      </button>
+      <button class="welcome-btn" id="w-pytorch">
+        <span class="wb-icon">🐍</span><span><b>PyTorch 项目</b><small>浏览 nn.Module 层级</small></span>
+      </button>
+    </div>
+    <p class="welcome-hint">提示：<kbd>⌘/Ctrl</kbd>+<kbd>K</kbd> 命令面板 · <kbd>右键</kbd> 画布菜单 · 文件可随时拖入窗口</p>
+  </div>
+</div>
+
+<!-- compare setup dialog -->
+<div id="dlg-compare" class="modal hidden">
+  <div class="modal-card">
+    <h3>选择两个模型进行对比</h3>
+    <div class="pick-row">
+      <span class="pick-label">基准 A</span>
+      <button class="pick-btn" id="pick-a">选择文件…</button>
+      <span id="pick-a-name" class="pick-name">未选择</span>
+    </div>
+    <div class="pick-row">
+      <span class="pick-label">候选 B</span>
+      <button class="pick-btn" id="pick-b">选择文件…</button>
+      <span id="pick-b-name" class="pick-name">未选择</span>
+    </div>
+    <details>
+      <summary>折叠与匹配选项</summary>
+      <label>最小组大小 <input type="number" id="cmp-min-size" value="3" min="2" style="width:4em"></label>
+      <label>最低置信度 <input type="number" id="cmp-min-conf" value="0.9" min="0" max="1" step="0.05" style="width:5em"></label>
+    </details>
+    <div class="row">
+      <button class="primary" id="cmp-run">开始对比</button>
+      <button id="cmp-cancel">取消</button>
+    </div>
+    <div id="cmp-status" class="status"></div>
+  </div>
+</div>
+
+<!-- command palette -->
+<div id="palette" class="modal hidden" style="align-items:flex-start; background:rgba(30,38,46,.25)">
+  <div class="palette-card">
+    <input type="text" id="palette-input" placeholder="输入命令或搜索节点…  (打开、对比、导出、图层、节点名…)">
+    <div id="palette-list" class="palette-list"></div>
+    <div class="palette-foot"><kbd>↑↓</kbd> 选择 · <kbd>↵</kbd> 执行 · <kbd>Esc</kbd> 关闭</div>
+  </div>
+</div>
+
+<!-- context menu -->
+<div id="ctx-menu" class="hidden"></div>
+
+<!-- layer panel (bottom-right floating) -->
+<div id="layer-panel" class="hidden">
+  <div class="lp-head"><span>图层与图例</span><button id="lp-close">✕</button></div>
+  <div class="lp-toggles" id="lp-toggles"></div>
+  <div class="lp-legend">
+    <div class="legend-item"><span class="swatch sw-unchanged"></span>结构相同</div>
+    <div class="legend-item"><span class="swatch sw-added"></span>新增 (B 独有)</div>
+    <div class="legend-item"><span class="swatch sw-removed"></span>删除 (A 独有)</div>
+    <div class="legend-item"><span class="swatch sw-modified"></span>修改</div>
+    <div class="legend-item"><span class="swatch sw-ambiguous"></span>匹配不确定</div>
+    <div class="heat-legend">
+      <div class="heat-scale"><span class="h0"></span><span class="h1"></span><span class="h2"></span><span class="h3"></span><span class="h4"></span></div>
+      <div class="heat-labels"><span id="heat-min">min</span><span>热力</span><span id="heat-max">max</span></div>
+    </div>
+  </div>
+</div>
+
+<footer id="statusbar">
+  <span id="sb-left">就绪 — 拖入 .onnx 文件，或按 ⌘/Ctrl+K</span>
+  <span id="sb-right"></span>
+</footer>
+
+<div id="drop-overlay" class="hidden">
+  <div>拖放 .onnx 模型文件以打开<div class="drop-sub">对比模式：一次拖入两个文件</div></div>
+</div>
+<div id="toast" class="hidden"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
