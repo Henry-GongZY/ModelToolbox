@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modeltoolbox"
+version = "0.1.0"
+description = "Local-first model structure diff workbench (ONNX diff, PyTorch hierarchy, profile heatmap)"
+requires-python = ">=3.9"
+dependencies = ["onnx>=1.15", "numpy"]
+
+[project.optional-dependencies]
+torch = ["torch"]
+dev = ["pytest"]
+
+[tool.setuptools]
+package-dir = {"" = "backend"}
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
