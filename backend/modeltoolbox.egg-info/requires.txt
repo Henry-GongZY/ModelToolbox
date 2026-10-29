@@ -1,8 +1,0 @@
-onnx>=1.15
-numpy
-
-[dev]
-pytest
-
-[torch]
-torch
