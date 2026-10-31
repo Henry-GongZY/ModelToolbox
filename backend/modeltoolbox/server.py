@@ -524,6 +524,7 @@ def _layout_dict(lr) -> dict:
         "width": lr.width, "height": lr.height,
         "ranks": lr.ranks,
         "edge_points": lr.edge_points,
+        "orientation": getattr(lr, "orientation", "horizontal"),
     }
 
 

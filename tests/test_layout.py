@@ -16,12 +16,26 @@ def _linear():
 def test_linear_ranks_and_positions():
     ir = _linear()
     lr = layout_single(ir)
+    # a deep narrow chain auto-picks the vertical orientation (Netron-style)
+    assert lr.orientation == "vertical"
     assert lr.ranks == {"n1": 0, "n2": 1, "n3": 2}
-    assert lr.boxes["n2"].x == lr.boxes["n1"].x + NODE_W + X_GAP
-    assert lr.boxes["n3"].x == lr.boxes["n2"].x + NODE_W + X_GAP
-    # distinct y within the whole layout (each on own rank so all can share y)
-    assert lr.boxes["n1"].y == 0
-    assert lr.width > NODE_W and lr.height >= NODE_H
+    assert lr.boxes["n2"].y == lr.boxes["n1"].y + NODE_H + Y_GAP
+    assert lr.boxes["n3"].y == lr.boxes["n2"].y + NODE_H + Y_GAP
+    # row 0 is reserved for the graph-input pseudo node
+    assert lr.boxes["n1"].y == NODE_H + Y_GAP
+    assert lr.boxes["__in__:x"].y == 0
+    assert lr.width >= NODE_W and lr.height >= NODE_H
+
+
+def test_wide_branchy_graph_stays_horizontal():
+    # a graph with many parallel nodes per rank must stay horizontal
+    nodes = [(f"n{i}", "Relu", ["x"], [f"t{i}"]) for i in range(12)]
+    nodes.append(("a", "Add", [f"t{i}" for i in range(12)], ["y"]))
+    ir = make_ir(nodes=nodes, inputs=[("x", "FLOAT", [1])],
+                 outputs=[("y", "FLOAT", [1])], model_id="wide")
+    lr = layout_single(ir)
+    assert lr.orientation == "horizontal"
+    assert lr.boxes["a"].x > lr.boxes["n0"].x
 
 
 def test_branch_join_same_rank_no_overlap():
@@ -32,10 +46,14 @@ def test_branch_join_same_rank_no_overlap():
         initializers=[("w", "FLOAT", [1])], model_id="m",
     )
     lr = layout_single(ir)
-    assert lr.ranks["r"] == lr.ranks["s"] == 1
-    assert lr.ranks["a"] == 2
-    assert lr.boxes["r"].y != lr.boxes["s"].y
-    assert abs(lr.boxes["r"].y - lr.boxes["s"].y) >= NODE_H + Y_GAP
+    if lr.orientation == "vertical":
+        # same rank → same y; siblings occupy distinct x slots
+        assert lr.boxes["r"].y == lr.boxes["s"].y
+        assert abs(lr.boxes["r"].x - lr.boxes["s"].x) >= NODE_W + X_GAP
+        assert lr.boxes["a"].y > lr.boxes["r"].y
+    else:
+        assert lr.boxes["r"].y != lr.boxes["s"].y
+        assert abs(lr.boxes["r"].y - lr.boxes["s"].y) >= NODE_H + Y_GAP
 
 
 def test_pseudo_io_nodes_present():
@@ -43,23 +61,21 @@ def test_pseudo_io_nodes_present():
     lr = layout_single(ir)
     assert "__in__:x" in lr.boxes and lr.boxes["__in__:x"].kind == "input"
     assert "__out__:y" in lr.boxes and lr.boxes["__out__:y"].kind == "output"
-    # input pseudo sits left of its consumer's rank
-    assert lr.boxes["__in__:x"].x < lr.boxes["n1"].x
-    assert lr.boxes["__out__:y"].x > lr.boxes["n3"].x
+    # input pseudo sits above its consumer's rank in vertical orientation
+    assert lr.boxes["__in__:x"].y < lr.boxes["n1"].y
+    assert lr.boxes["__out__:y"].y > lr.boxes["n3"].y
 
 
 def test_edge_points_on_box_edges():
     ir = _linear()
     lr = layout_single(ir)
-    for eid, pts in lr.edge_points.items():
-        for side in ("src", "dst"):
-            assert len(pts[side]) == 2
-    e = next(eid for eid, e in ((e.id, e) for e in ir.edges)
-             if e.src == "n1" and e.dst == "n2")
-    pts = lr.edge_points[e]
+    assert lr.orientation == "vertical"
     n1, n2 = lr.boxes["n1"], lr.boxes["n2"]
-    assert pts["src"] == [n1.x + n1.w, n1.y + n1.h / 2]
-    assert pts["dst"] == [n2.x, n2.y + n2.h / 2]
+    e = next(e.id for e in ir.edges if e.src == "n1" and e.dst == "n2")
+    pts = lr.edge_points[e]
+    # vertical orientation: source exits the bottom edge, enters the top edge
+    assert pts["src"] == [n1.x + n1.w / 2, n1.y + n1.h]
+    assert pts["dst"] == [n2.x + n2.w / 2, n2.y]
 
 
 def test_deterministic():

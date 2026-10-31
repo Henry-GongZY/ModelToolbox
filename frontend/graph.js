@@ -16,6 +16,28 @@ function htmlEl(tag, cls) {
   return e;
 }
 
+// Netron-style op category colors (soft fills on the light theme).
+const OP_COLORS = {
+  Conv: "#dbe9fb", ConvTranspose: "#dbe9fb", MatMul: "#dbe9fb", Gemm: "#dbe9fb",
+  Relu: "#fbe2e0", LeakyRelu: "#fbe2e0", Sigmoid: "#fbe2e0", Tanh: "#fbe2e0",
+  Softmax: "#fbe2e0", Elu: "#fbe2e0", Relu6: "#fbe2e0",
+  MaxPool: "#dff0e3", AveragePool: "#dff0e3", GlobalAveragePool: "#dff0e3",
+  Concat: "#fff3d6", Add: "#efe7fb", Sub: "#efe7fb", Mul: "#efe7fb", Div: "#efe7fb",
+  Reshape: "#e8f0f8", Transpose: "#e8f0f8", Resize: "#e8f0f8", Squeeze: "#e8f0f8",
+  Unsqueeze: "#e8f0f8", Flatten: "#e8f0f8", Slice: "#e8f0f8", Gather: "#e8f0f8",
+  Cast: "#eeeeee", Shape: "#eeeeee", Constant: "#eeeeee", Identity: "#eeeeee",
+  BatchNormalization: "#fde8d8", Dropout: "#fde8d8", If: "#f6dceb", Loop: "#f6dceb",
+};
+function opColor(op) {
+  if (!op) return null;
+  if (OP_COLORS[op]) return OP_COLORS[op];
+  // stable hash into a soft fallback palette
+  let h = 0;
+  for (let i = 0; i < op.length; i++) h = (h * 31 + op.charCodeAt(i)) >>> 0;
+  const palette = ["#e3ecfa", "#faeaea", "#e9f5ec", "#faf3e0", "#efe9fa", "#e8f1f5"];
+  return palette[h % palette.length];
+}
+
 export class GraphView {
   constructor(container, opts = {}) {
     this.container = container;
@@ -55,6 +77,7 @@ export class GraphView {
   setData(layout, nodeExtra = {}) {
     this.boxes = layout.boxes || {};
     this.edgePoints = layout.edge_points || {};
+    this.orientation = layout.orientation || "horizontal";
     this.nodeExtra = nodeExtra || {};
     this.rendered.clear();
     this.edgeLayer.innerHTML = "";
@@ -294,19 +317,21 @@ export class GraphView {
       if (Math.max(sx, dx) < vb.x0 - pad || Math.min(sx, dx) > vb.x1 + pad ||
           Math.max(sy, dy) < vb.y0 - pad || Math.min(sy, dy) > vb.y1 + pad) continue;
       const midX = (sx + dx) / 2;
-      this.edgeLayer.appendChild(el("path", {
-        class: "edge-path",
-        d: `M ${sx} ${sy} C ${midX} ${sy}, ${midX} ${dy}, ${dx} ${dy}`,
-      }));
+      const midY = (sy + dy) / 2;
+      const d = this.orientation === "vertical"
+        ? `M ${sx} ${sy} C ${sx} ${midY}, ${dx} ${midY}, ${dx} ${dy}`
+        : `M ${sx} ${sy} C ${midX} ${sy}, ${midX} ${dy}, ${dx} ${dy}`;
+      this.edgeLayer.appendChild(el("path", { class: "edge-path", d }));
       if (showNames && pts.tensor) {
-        const lx = (sx + dx) / 2, ly = (sy + dy) / 2 - 3;
+        const lx = this.orientation === "vertical" ? sx + 4 : (sx + dx) / 2;
+        const ly = this.orientation === "vertical" ? midY : (sy + dy) / 2 - 3;
         const label = pts.tensor.length > 26 ? pts.tensor.slice(0, 25) + "…" : pts.tensor;
         const w = label.length * 5.6 + 4;
         this.edgeLabelLayer.appendChild(el("rect", {
-          class: "edge-label-bg", x: lx - w / 2, y: ly - 8, width: w, height: 12, rx: 2,
+          class: "edge-label-bg", x: lx - 2, y: ly - 8, width: w, height: 12, rx: 2,
         }));
         const t = el("text", {
-          class: "edge-label", x: lx, y: ly + 1, "text-anchor": "middle",
+          class: "edge-label", x: lx + 2, y: ly + 1, "text-anchor": "start",
         });
         t.textContent = label;
         this.edgeLabelLayer.appendChild(t);
@@ -345,16 +370,19 @@ export class GraphView {
     if (!opText) return;
     let op = b.kind === "input" || b.kind === "output" ? "Input/Output" : (extra.op || b.label || id);
     if (b.kind === "group") op = b.label;
-    op = op.length > 22 ? op.slice(0, 21) + "…" : op;
+    const opMax = Math.floor((b.w - 18) / 6.6);
+    if (op.length > opMax) op = op.slice(0, opMax - 1) + "…";
     opText.textContent = op;
     let tensor = "";
     if (b.kind === "input" || b.kind === "output") {
       tensor = b.label || id.split(":").pop();
     } else {
       const outs = extra.outTensors || [];
-      tensor = outs.length ? outs.join(", ") : (b.kind === "group" ? "" : "");
+      tensor = outs.length ? outs.join(", ") : "";
     }
-    if (tensor.length > 28) tensor = tensor.slice(0, 27) + "…";
+    // monospace ~6.3px per char at 10.5px
+    const tMax = Math.floor((b.w - 18) / 6.3);
+    if (tensor.length > tMax) tensor = tensor.slice(0, tMax - 1) + "…";
     tensorText.textContent = tensor;
   }
 
@@ -362,18 +390,25 @@ export class GraphView {
     g.classList.remove("node-selected", "node-added", "node-removed", "node-modified",
       "node-ambiguous", "node-dim", "io-pill", "group-node");
     const b = this.boxes[g.getAttribute("data-id")];
+    const id = g.getAttribute("data-id");
     if (b && (b.kind === "input" || b.kind === "output")) g.classList.add("io-pill");
     if (b && b.kind === "group") g.classList.add("group-node");
     if (st.cls) g.classList.add(st.cls);
     if (st.dim) g.classList.add("node-dim");
-    if (this.selected === g.getAttribute("data-id")) g.classList.add("node-selected");
+    if (this.selected === id) g.classList.add("node-selected");
     const rect = g.querySelector(".node-rect");
-    if (rect) {
-      if (st.fill) rect.style.fill = st.fill;
-      else rect.style.fill = "";
+    // fill priority: explicit style fill (heat) > op-category color > theme
+    let fill = st.fill;
+    if (!fill) {
+      const extra = this.nodeExtra[id];
+      fill = opColor(extra && extra.op);
     }
-    const dark = st.fill && parseInt(st.fill.slice(1, 3), 16) < 0x80 &&
-                 parseInt(st.fill.slice(3, 5), 16) < 0x80;
+    if (rect) rect.style.fill = fill || "";
+    // dark heat fills need light text; op colors are all light fills
+    const eff = (st.fill || "").toLowerCase();
+    const dark = eff.startsWith("#") &&
+                 parseInt(eff.slice(1, 3), 16) < 0x80 &&
+                 parseInt(eff.slice(3, 5), 16) < 0x80;
     for (const t of g.querySelectorAll(".node-op, .node-tensor")) {
       t.style.fill = dark ? "#ffffff" : "";
     }

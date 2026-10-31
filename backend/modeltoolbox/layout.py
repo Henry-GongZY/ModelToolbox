@@ -36,6 +36,7 @@ class LayoutResult:
     height: float = 0.0
     ranks: Dict[str, int] = field(default_factory=dict)
     edge_points: Dict[str, dict] = field(default_factory=dict)
+    orientation: str = "horizontal"  # "horizontal" (rank→x) | "vertical" (rank→y)
 
 
 def pseudo_in(tensor: str) -> str:
@@ -169,7 +170,6 @@ def layout_single(ir: GraphIR) -> LayoutResult:
         positions_order = new_order
 
     # Assign coordinates
-    x_by_rank = {r: r * (NODE_W + X_GAP) for r in sorted_ranks}
     index_in_rank: Dict[str, int] = {}
     counters: Dict[int, int] = {}
     for nid in positions_order:
@@ -179,21 +179,38 @@ def layout_single(ir: GraphIR) -> LayoutResult:
         counters[r] = i + 1
 
     max_rank = max(sorted_ranks) if sorted_ranks else 0
-    width = (max_rank + 1) * (NODE_W + X_GAP) - X_GAP
-    for r in sorted_ranks:
-        layer_h = counters.get(r, 0) * (NODE_H + Y_GAP) - Y_GAP
-        width = max(width, (NODE_W + X_GAP) * 3)
-        # per-rank height handled below via global height
-    height = max(counters.values()) * (NODE_H + Y_GAP) - Y_GAP
 
-    for nid in positions_order:
-        r = ranks.get(nid, pseudo_rank.get(nid, 0))
-        x = x_by_rank[r]
-        y = index_in_rank[nid] * (NODE_H + Y_GAP)
-        res.boxes[nid] = NodeBox(node_id=nid, x=x, y=y, w=NODE_W, h=NODE_H,
-                                 kind=kind_of(nid), label=label_of(nid))
-        if nid in ranks:
-            res.ranks[nid] = r
+    # ---- orientation auto-pick -------------------------------------------
+    # A deep, narrow graph (chain-like, e.g. UNet) reads top-to-bottom like
+    # Netron; a wide, branchy graph reads left-to-right. Compare the space
+    # each orientation would need; prefer vertical when horizontal is much
+    # wider than tall.
+    max_layer_size = max(counters.values()) if counters else 1
+    horiz_span = (max_rank + 1) * (NODE_W + X_GAP)
+    vert_span = max_layer_size * (NODE_W + X_GAP)
+    horiz_h = max_layer_size * (NODE_H + Y_GAP)
+    vertical = horiz_span > vert_span * 1.35 or (horiz_span > 5000 and horiz_h < 1000)
+
+    if vertical:
+        for nid in positions_order:
+            r = ranks.get(nid, pseudo_rank.get(nid, 0))
+            y = r * (NODE_H + Y_GAP) + (NODE_H + Y_GAP)  # shift down for input pseudos at rank -1
+            x = index_in_rank[nid] * (NODE_W + X_GAP)
+            res.boxes[nid] = NodeBox(node_id=nid, x=x, y=y, w=NODE_W, h=NODE_H,
+                                     kind=kind_of(nid), label=label_of(nid))
+            if nid in ranks:
+                res.ranks[nid] = r
+        res.orientation = "vertical"
+    else:
+        for nid in positions_order:
+            r = ranks.get(nid, pseudo_rank.get(nid, 0))
+            x = r * (NODE_W + X_GAP)
+            y = index_in_rank[nid] * (NODE_H + Y_GAP)
+            res.boxes[nid] = NodeBox(node_id=nid, x=x, y=y, w=NODE_W, h=NODE_H,
+                                     kind=kind_of(nid), label=label_of(nid))
+            if nid in ranks:
+                res.ranks[nid] = r
+        res.orientation = "horizontal"
 
     # Width/height from actual box extents (pseudo io nodes may extend both
     # ends beyond node ranks).
@@ -204,7 +221,8 @@ def layout_single(ir: GraphIR) -> LayoutResult:
         res.width = 0
         res.height = 0
 
-    # Edge anchor points
+    # Edge anchor points: horizontal → right/left edge midpoints;
+    # vertical → bottom/top edge midpoints.
     for e in ir.edges:
         src_id = e.src if e.src else (
             pseudo_in(e.tensor) if pseudo_in(e.tensor) in res.boxes else None)
@@ -218,11 +236,18 @@ def layout_single(ir: GraphIR) -> LayoutResult:
         db = res.boxes.get(dst_id)
         if not sb or not db:
             continue
-        res.edge_points[e.id] = {
-            "src": [sb.x + sb.w, sb.y + sb.h / 2],
-            "dst": [db.x, db.y + db.h / 2],
-            "tensor": e.tensor,
-        }
+        if res.orientation == "vertical":
+            res.edge_points[e.id] = {
+                "src": [sb.x + sb.w / 2, sb.y + sb.h],
+                "dst": [db.x + db.w / 2, db.y],
+                "tensor": e.tensor,
+            }
+        else:
+            res.edge_points[e.id] = {
+                "src": [sb.x + sb.w, sb.y + sb.h / 2],
+                "dst": [db.x, db.y + db.h / 2],
+                "tensor": e.tensor,
+            }
     return res
 
 
@@ -296,6 +321,10 @@ def layout_diff_pair(a: GraphIR, b: GraphIR, matches: List[Any]) -> Tuple[Layout
                     i += 1
 
         max_rank = max(by_rank) if by_rank else 0
+        vertical = lr.orientation == "vertical"
+        out.orientation = lr.orientation
+        STEP_W = NODE_H + Y_GAP if vertical else NODE_W + X_GAP
+        STEP_S = NODE_W + X_GAP if vertical else NODE_H + Y_GAP
         for nid, box in lr.boxes.items():
             if box.kind in ("input", "output"):
                 continue  # placed after real nodes, following their neighbour
@@ -305,15 +334,22 @@ def layout_diff_pair(a: GraphIR, b: GraphIR, matches: List[Any]) -> Tuple[Layout
                 slot = pair_slots[(r, p[0])]
             else:
                 slot = unmatched_slots.get(nid, 0)
-            out.boxes[nid] = NodeBox(
-                node_id=nid, x=r * (NODE_W + X_GAP), y=slot * (NODE_H + Y_GAP),
-                w=NODE_W, h=NODE_H, kind=box.kind, label=box.label)
+            if vertical:
+                # rank runs downward, slots run rightward
+                out.boxes[nid] = NodeBox(
+                    node_id=nid, x=slot * STEP_S + 40, y=(r + 1) * STEP_W,
+                    w=NODE_W, h=NODE_H, kind=box.kind, label=box.label)
+            else:
+                out.boxes[nid] = NodeBox(
+                    node_id=nid, x=r * STEP_W, y=slot * STEP_S,
+                    w=NODE_W, h=NODE_H, kind=box.kind, label=box.label)
             if box.kind == "node":
                 out.ranks[nid] = r
 
         # Pseudo io nodes follow the new y of the node they connect to, so
         # they stay visually attached on both sides.
         node_y = {nid: b.y for nid, b in out.boxes.items()}
+        node_x = {nid: b.x for nid, b in out.boxes.items()}
         for nid, box in lr.boxes.items():
             if box.kind not in ("input", "output"):
                 continue
@@ -324,15 +360,26 @@ def layout_diff_pair(a: GraphIR, b: GraphIR, matches: List[Any]) -> Tuple[Layout
             else:
                 anchor = next((e.src for e in ir.edges
                                if e.dst == "" and e.tensor == tensor and e.src), None)
-            new_y = node_y.get(anchor)
             r = union_rank[side].get(nid, lr.ranks.get(nid, 0))
-            if new_y is None:
-                new_y = box.y
-            out.boxes[nid] = NodeBox(
-                node_id=nid, x=r * (NODE_W + X_GAP), y=new_y,
-                w=NODE_W, h=NODE_H, kind=box.kind, label=box.label)
-        out.width = (max_rank + 1) * (NODE_W + X_GAP)
-        out.height = max([b.y for b in out.boxes.values()] + [0]) + NODE_H
+            if vertical:
+                new_y = (r + 1) * STEP_W
+                new_x = node_x.get(anchor, 40)
+                if new_x is None:
+                    new_x = box.x
+                out.boxes[nid] = NodeBox(
+                    node_id=nid, x=new_x, y=new_y,
+                    w=NODE_W, h=NODE_H, kind=box.kind, label=box.label)
+            else:
+                new_x = r * STEP_W
+                new_y = node_y.get(anchor)
+                if new_y is None:
+                    new_y = box.y
+                out.boxes[nid] = NodeBox(
+                    node_id=nid, x=new_x, y=new_y,
+                    w=NODE_W, h=NODE_H, kind=box.kind, label=box.label)
+        if out.boxes:
+            out.width = max(b.x + b.w for b in out.boxes.values()) - min(b.x for b in out.boxes.values())
+            out.height = max(b.y + b.h for b in out.boxes.values()) - min(b.y for b in out.boxes.values())
         # recompute edge points on new geometry
         for e in ir.edges:
             src_id = e.src if e.src else pseudo_in(e.tensor)
@@ -344,20 +391,31 @@ def layout_diff_pair(a: GraphIR, b: GraphIR, matches: List[Any]) -> Tuple[Layout
             sb = out.boxes.get(src_id)
             db = out.boxes.get(dst_id)
             if sb and db:
-                out.edge_points[e.id] = {
-                    "src": [sb.x + sb.w, sb.y + sb.h / 2],
-                    "dst": [db.x, db.y + db.h / 2],
-                    "tensor": e.tensor,
-                }
+                if out.orientation == "vertical":
+                    out.edge_points[e.id] = {
+                        "src": [sb.x + sb.w / 2, sb.y + sb.h],
+                        "dst": [db.x + db.w / 2, db.y],
+                        "tensor": e.tensor,
+                    }
+                else:
+                    out.edge_points[e.id] = {
+                        "src": [sb.x + sb.w, sb.y + sb.h / 2],
+                        "dst": [db.x, db.y + db.h / 2],
+                        "tensor": e.tensor,
+                    }
         return out
 
     la2 = rebuild(la, "a", a)
     lb2 = rebuild(lb, "b", b)
 
-    # Hard guarantee: matched pairs share the same y.
+    # Hard guarantee: matched pairs share the same row (horizontal) or the
+    # same column (vertical).
     for mid, uid, vid in pairs:
         ba = la2.boxes.get(uid)
         bb = lb2.boxes.get(vid)
         if ba and bb:
-            bb.y = ba.y
+            if la2.orientation == "vertical":
+                bb.x = ba.x
+            else:
+                bb.y = ba.y
     return la2, lb2

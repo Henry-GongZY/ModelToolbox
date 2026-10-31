@@ -146,7 +146,7 @@ function setMode(mode) {
 // ---------- detail cards ----------
 function fmtShape(vi) {
   if (!vi) return "";
-  const shp = vi.shape === null ? "?" : JSON.stringify(vi.shape);
+  const shp = vi.shape === null ? "?" : JSON.stringify(vi.shape).replace(/null/g, "?");
   return `${vi.dtype || "?"} ${shp}`;
 }
 
