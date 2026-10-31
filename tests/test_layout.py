@@ -4,6 +4,30 @@ from helpers import make_ir
 from modeltoolbox.layout import NODE_H, NODE_W, X_GAP, Y_GAP, layout_diff_pair, layout_single
 
 
+def test_side_chain_sinks_to_consumer():
+    """Regression (Netron-structure parity): a Constant→Concat side chain
+    feeding a DEEP Resize must sink next to its consumer instead of sitting
+    in a top band far away. Longest-path ranking puts it early; the sink
+    pass must pull it down to just above the consumer."""
+    deep = make_ir(
+        nodes=[("r0", "Relu", ["x"], ["t0"])] +
+              [(f"n{i}", "Relu", [f"t{i-1}"], [f"t{i}"]) for i in range(1, 12)] +
+              [("const", "Constant", [], ["c_out"]),
+               ("const2", "Constant", [], ["c2_out"]),
+               ("concat", "Concat", ["c_out", "c2_out"], ["cat_out"]),
+               ("resize", "Resize", ["t11", "cat_out"], ["y"])],
+        inputs=[("x", "FLOAT", [1])], outputs=[("y", "FLOAT", [1])],
+        model_id="sink",
+    )
+    lr = layout_single(deep)
+    assert lr.ranks["resize"] == 12
+    # concat must sit immediately above its Resize, not in a top band
+    assert lr.ranks["concat"] == lr.ranks["resize"] - 1
+    assert lr.ranks["const"] == lr.ranks["concat"] - 1
+    # and the main spine is untouched
+    assert lr.ranks["n11"] == 11
+
+
 def _linear():
     return make_ir(
         nodes=[("n1", "Conv", ["x", "w"], ["h1"]), ("n2", "Relu", ["h1"], ["h2"]),

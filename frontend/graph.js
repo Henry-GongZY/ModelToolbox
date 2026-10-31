@@ -318,9 +318,30 @@ export class GraphView {
           Math.max(sy, dy) < vb.y0 - pad || Math.min(sy, dy) > vb.y1 + pad) continue;
       const midX = (sx + dx) / 2;
       const midY = (sy + dy) / 2;
-      const d = this.orientation === "vertical"
-        ? `M ${sx} ${sy} C ${sx} ${midY}, ${dx} ${midY}, ${dx} ${dy}`
-        : `M ${sx} ${sy} C ${midX} ${sy}, ${midX} ${dy}, ${dx} ${dy}`;
+      let d;
+      if (this.orientation === "vertical") {
+        const span = dy - sy;
+        if (span > 420) {
+          // long skip edge: arc around the side like Netron instead of
+          // cutting straight through the spine
+          const dir = dx >= sx ? 1 : -1;
+          const b = Math.min(280, 70 + span / 5);
+          d = `M ${sx} ${sy} C ${sx + dir * b} ${sy + span * 0.22}, ` +
+              `${dx + dir * b} ${dy - span * 0.22}, ${dx} ${dy}`;
+        } else {
+          d = `M ${sx} ${sy} C ${sx} ${midY}, ${dx} ${midY}, ${dx} ${dy}`;
+        }
+      } else {
+        const span = dx - sx;
+        if (span > 420) {
+          const dir = dy >= sy ? 1 : -1;
+          const b = Math.min(280, 70 + span / 5);
+          d = `M ${sx} ${sy} C ${sx + span * 0.22} ${sy + dir * b}, ` +
+              `${dx - span * 0.22} ${dy + dir * b}, ${dx} ${dy}`;
+        } else {
+          d = `M ${sx} ${sy} C ${midX} ${sy}, ${midX} ${dy}, ${dx} ${dy}`;
+        }
+      }
       this.edgeLayer.appendChild(el("path", { class: "edge-path", d }));
       if (showNames && pts.tensor) {
         const lx = this.orientation === "vertical" ? sx + 4 : (sx + dx) / 2;

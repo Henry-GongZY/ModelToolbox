@@ -71,3 +71,15 @@
 - 结果：diff = 64 unchanged + 1 connection_changed（/inc/conv1 上游变为 stem_act，诚实语义）+ 4 added（stem_in/act/out/Add）；折叠 @0.9 出 57 节点组。浏览器实测：拖入两文件自动对比、折叠勾选、差异导航 1/5 跳转。
 - 修复 UI 残留 `setStatus is not defined`（重写遗留）与 fitView 对又长又扁图的过缩（scale<0.45 时适配高度锚定左上）。
 - 测试 101/101。
+
+## UNet 双工具结构对比（2026-11-01，用户指出结构问题）
+
+用户对比本项目与 Netron 渲染同一 unet5_512.onnx，指出 Constant/Concat 全堆在顶部一排结构不合理。根因：rank 用"最长路径（尽早放置）"，纯供料侧链（Resize 的 scales 构建 Constant→Concat）被放在 rank 1-2，而消费者 Resize 在主干 10-46 层 → 顶部杂带 + 超长垂边。
+
+修复（对标 Netron 的布局语义）：
+1. `_sink_feeders` 下沉 pass：每个节点 sink 到 min(后继 rank)-1（可行性保持：边距 ≥1；主干节点 ceiling==自身 rank 不动），迭代到不动点。效果：UNet 中 4 组 scales 侧链全部贴到各自 Resize 上层（rank 27→28 等）。
+2. 大跨度 skip 边外凸绕行（span>420 时控制点外推 min(280, 70+span/5)，按 dx 方向选侧），替代穿主干的直曲线。
+3. 布局方向自适应（前一轮）：深窄图自动转垂直。
+4. shape 符号维度显示 `?`。
+
+验证：新增侧链下沉回归测试（含错误图结构修正）；102→103 全部通过；浏览器复验 UNet 顶部杂带消失、侧链贴邻、skip 弧线绕行。

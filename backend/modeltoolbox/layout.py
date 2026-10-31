@@ -77,12 +77,43 @@ def _ranks(ir: GraphIR) -> Tuple[Dict[str, int], Dict[str, List[str]], Dict[str,
     return ranks, preds, succs
 
 
+def _sink_feeders(ir: GraphIR, ranks: Dict[str, int], preds, succs) -> None:
+    """Sink pure-feeder nodes toward their consumers (minimize edge span).
+
+    Longest-path ranking places every node as EARLY as possible, which
+    strands short side-chains (e.g. the Constant→Concat that builds a
+    Resize's scales) dozens of ranks away from the deep node that consumes
+    them — the whole band then renders as one meaningless row. Sinking each
+    node to ``min(successor ranks) - 1`` is feasibility-preserving (edges
+    stay >= 1) and only moves nodes whose consumers are deeper; spine nodes
+    have ceiling == own rank and never move. Iterated to a fixed point.
+    """
+    order = [n.id for n in ir.nodes]
+    changed = True
+    while changed:
+        changed = False
+        for nid in order:
+            ss = succs.get(nid)
+            if not ss:
+                continue
+            ceiling = min(ranks[s] for s in ss if s in ranks) - 1
+            floor = 0
+            if preds.get(nid):
+                ranked = [ranks[p] for p in preds[nid] if p in ranks]
+                if ranked:
+                    floor = max(ranked) + 1
+            if ceiling > ranks.get(nid, 0) and ceiling >= floor:
+                ranks[nid] = ceiling
+                changed = True
+
+
 def layout_single(ir: GraphIR) -> LayoutResult:
     res = LayoutResult()
     if not ir.nodes:
         return res
 
     ranks, preds, succs = _ranks(ir)
+    _sink_feeders(ir, ranks, preds, succs)
 
     graph_in_tensors = [v.name for v in ir.inputs]
     graph_out_tensors = [v.name for v in ir.outputs]
