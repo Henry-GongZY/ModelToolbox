@@ -139,3 +139,9 @@
 - 构建：`python -m build` → modeltoolbox-0.2.0 wheel 3.8MB（179 个前端文件随包）+ sdist 3.7MB。
 - 冒烟（全新 venv、脱离仓库源码）：`pip install` wheel → `modeltoolbox --port 8799` → /api/health、/、/netron/view.js、模型加载、/netron/data 字节端点全 200；torch 缺失时优雅降级。
 - README 增加 PyPI 安装方式。106/106 测试通过。
+
+## Diff 染色开关适配 Netron 渲染（2026-11-01，用户反馈"关闭了还染色"）
+
+- 确认两个事实：(1) 对比模式进入时 Diff 染色默认开（设计行为，与自研渲染一致）；(2) **关闭无效是真 bug**——Netron 分支的 netronApplyDiffTint 未读取开关。修复：关闭时向两侧 viewer 传空映射 → netronTintDiff 自带清除逻辑恢复 Netron 原生配色。
+- 调试中连环发现并修复：打包后开发服务器未重启（页面 404 的根因）；state.useNetronCompare 挂错位置（顶层 → state.compare 内）；桥接就绪判定只看模型 table，而 Netron 的 DOM 构建晚于 table——加"element 未就绪自动重试"（40×400ms）；桥接轮询窗口 12s→96s（双 viewer 并行解析更慢）；cb 异常不再被静默吞掉（写 __mtbxBridgeErr）；新增 window.__mtbx 调试钩子。
+- 浏览器全链路复验：默认染色开 → 关闭恢复原生 → 重开恢复染色，三态正确；106/106 测试通过。

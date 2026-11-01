@@ -17,13 +17,13 @@ const state = {
     diffId: null, diff: null, match: null, folding: null, layouts: null,
     aModelId: null, bModelId: null, nodesA: {}, nodesB: {}, folded: new Set(),
     navIdx: -1, mappedA: null, mappedB: null, nameA: "", nameB: "",
+    useNetronCompare: false, // dual official Netron viewers for compare mode
   },
   pytorch: { result: null, view: "overview" },
   useNetron: true, // browse canvas rendered by the vendored official Netron viewer
   detailCache: { a: {}, b: {} },
   pendingCompare: { a: null, b: null },
   layerPanelClosed: false,
-  useNetronCompare: false, // dual official Netron viewers for compare mode
 };
 
 // ---------- tiny helpers ----------
@@ -86,19 +86,24 @@ const browseGraph = new GraphView($("browse-graph"), {
 function netronFrameReadyId(frameId, cb) {
   const f = $(frameId);
   const ready = () => {
+    let w = null;
     try {
-      const w = f.contentWindow;
+      w = f.contentWindow;
       if (w && w.__view__ && w.__view__._target &&
           w.__view__._target._table && w.__view__._target._table.size > 0) {
         cb(w);
         return true;
       }
-    } catch (e) { /* not ready */ }
+    } catch (e) {
+      // surface callback errors instead of silently retrying forever
+      try { w.__mtbxBridgeErr = String(e && e.stack ? e.stack : e); } catch (e2) {}
+      return true; // stop retrying: the viewer is up but our callback failed
+    }
     return false;
   };
   if (ready()) return;
   let tries = 0;
-  const t = setInterval(() => { tries += 1; if (ready() || tries > 48) clearInterval(t); }, 250);
+  const t = setInterval(() => { tries += 1; if (ready() || tries > 240) clearInterval(t); }, 400);
 }
 
 function netronHideChrome(frameId) {
@@ -178,6 +183,7 @@ function netronDiffColorMaps() {
 
 function netronTintDiff(frameId, side, colorMap, dimIds) {
   netronFrameReadyId(frameId, (w) => {
+    try {
     const doc = $(frameId).contentDocument;
     doc.querySelectorAll("path.mtbx-heat").forEach((p) => {
       p.classList.remove("mtbx-heat"); p.style.fill = "";
@@ -196,12 +202,19 @@ function netronTintDiff(frameId, side, colorMap, dimIds) {
         if (dimIds && dimIds.has(name)) gnode.element.classList.add("mtbx-dim");
       }
     }
+    } catch (e) { w.__mtbxBridgeErr = String(e && e.stack ? e.stack : e); }
   });
 }
 
 
 function netronApplyDiffTint() {
   if (!state.compare.useNetronCompare || !state.compare.diff) return;
+  // respect the "Diff 染色" toggle: when off, restore native colors
+  if (!getLayer("layer-diff")) {
+    netronTintDiff("netron-frame-a", "a", {}, new Set());
+    netronTintDiff("netron-frame-b", "b", {}, new Set());
+    return;
+  }
   const { mapA, mapB, dimA, dimB } = netronDiffColorMaps();
   netronTintDiff("netron-frame-a", "a", mapA, dimA);
   netronTintDiff("netron-frame-b", "b", mapB, dimB);
@@ -329,11 +342,11 @@ function netronFrameReady(cb) {
   let tries = 0;
   const t = setInterval(() => {
     tries += 1;
-    if (ready() || tries > 48) clearInterval(t);
+    if (ready() || tries > 240) clearInterval(t);
   }, 250);
 }
 
-function netronApplyHeat(heatMap) {
+function netronApplyHeat(heatMap, attempt) {
   netronFrameReady((w) => {
     const doc = $("netron-frame").contentDocument;
     doc.querySelectorAll("path.mtbx-heat").forEach((p) => {
@@ -341,12 +354,14 @@ function netronApplyHeat(heatMap) {
       p.style.fill = "";
     });
     let hit = 0;
+    let built = 0;
     const target = w.__view__._target;
     // the table is keyed by the ONNX node OBJECT; match by its .name and
     // tint every row of the node (Netron rows are g.node-item > path)
     for (const [modelNode, gnode] of target._table.entries()) {
       const name = modelNode && modelNode.name;
       if (!name) continue;
+      if (gnode && gnode.element) built += 1;
       const color = heatMap[name];
       if (color && gnode && gnode.element) {
         const paths = gnode.element.querySelectorAll("g.node-item path");
@@ -355,6 +370,12 @@ function netronApplyHeat(heatMap) {
           hit += 1;
         }
       }
+    }
+    // Netron builds node DOM after the model table exists — retry while no
+    // node element has been built yet.
+    if (built === 0 && (attempt || 0) < 40) {
+      setTimeout(() => netronApplyHeat(heatMap, (attempt || 0) + 1), 400);
+      return;
     }
     if (Object.keys(heatMap).length) {
       setStatusText(hit ? `热力图已应用：${hit}/${Object.keys(heatMap).length} 节点着色（Netron 渲染）` : "热力图：Netron 中未匹配到节点", hit ? "ok" : "err");
