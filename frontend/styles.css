@@ -115,8 +115,8 @@ body {
 .heat-legend { margin-top: 6px; }
 .heat-scale { display: flex; height: 10px; border-radius: 3px; overflow: hidden; }
 .heat-scale span { flex: 1; }
-.h0 { background: #e8e6ef; } .h1 { background: #b5c2dc; } .h2 { background: #6f97c8; }
-.h3 { background: #3a6cb4; } .h4 { background: #1d4494; }
+.h0 { background: #31567e; } .h1 { background: #2f7fb5; } .h2 { background: #2f9e6e; }
+.h3 { background: #c9a227; } .h4 { background: #c94f43; }
 .heat-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-top: 2px; }
 
 /* ---------- main / graph ---------- */

@@ -69,7 +69,7 @@ const DIFF_BADGE = {
   connection_changed: { letter: "C", cls: "node-modified" },
   ambiguous: { letter: "?", cls: "node-ambiguous" },
 };
-const HEAT_COLORS = ["#e8e6ef", "#b5c2dc", "#6f97c8", "#3a6cb4", "#1d4494"];
+const HEAT_COLORS = ["#31567e", "#2f7fb5", "#2f9e6e", "#c9a227", "#c94f43"];
 function heatColor(v, min, max) {
   if (v == null || max == null || max <= min) return HEAT_COLORS[2];
   const t = Math.min(Math.max((v - min) / (max - min || 1), 0), 1);
@@ -162,6 +162,70 @@ function setMode(mode) {
 }
 
 // ---------- detail cards ----------
+// ---- Netron viewer bridge (iframe is same-origin; official viewer API) ----
+function netronFrameReady(cb) {
+  const f = $("netron-frame");
+  const ready = () => {
+    try {
+      const w = f.contentWindow;
+      if (w && w.__view__ && w.__view__._target &&
+          w.__view__._target._table && w.__view__._target._table.size > 0) {
+        cb(w);
+        return true;
+      }
+    } catch (e) { /* iframe not ready */ }
+    return false;
+  };
+  if (ready()) return;
+  let tries = 0;
+  const t = setInterval(() => {
+    tries += 1;
+    if (ready() || tries > 48) clearInterval(t);
+  }, 250);
+}
+
+function netronApplyHeat(heatMap) {
+  netronFrameReady((w) => {
+    const doc = $("netron-frame").contentDocument;
+    doc.querySelectorAll("path.mtbx-heat").forEach((p) => {
+      p.classList.remove("mtbx-heat");
+      p.style.fill = "";
+    });
+    let hit = 0;
+    const target = w.__view__._target;
+    // the table is keyed by the ONNX node OBJECT; match by its .name and
+    // tint every row of the node (Netron rows are g.node-item > path)
+    for (const [modelNode, gnode] of target._table.entries()) {
+      const name = modelNode && modelNode.name;
+      if (!name) continue;
+      const color = heatMap[name];
+      if (color && gnode && gnode.element) {
+        const paths = gnode.element.querySelectorAll("g.node-item path");
+        if (paths.length) {
+          for (const p of paths) { p.style.fill = color; p.classList.add("mtbx-heat"); }
+          hit += 1;
+        }
+      }
+    }
+    if (Object.keys(heatMap).length) {
+      setStatusText(hit ? `热力图已应用：${hit}/${Object.keys(heatMap).length} 节点着色（Netron 渲染）` : "热力图：Netron 中未匹配到节点", hit ? "ok" : "err");
+    }
+  });
+}
+
+function netronFocus(nodeName) {
+  netronFrameReady((w) => {
+    const t = w.__view__._target;
+    for (const [modelNode, gnode] of t._table.entries()) {
+      if (modelNode && modelNode.name === nodeName && gnode) {
+        t.scrollTo(t.select([modelNode], 'sidebar'));
+        return;
+      }
+    }
+    toast("该节点在 Netron 中无名称锚点（未命名节点）");
+  });
+}
+
 function fmtShape(vi) {
   if (!vi) return "";
   const shp = vi.shape === null ? "?" : JSON.stringify(vi.shape).replace(/null/g, "?");
@@ -632,8 +696,16 @@ function heatStyles(mapped, mode) {
 function refreshLayers() {
   const mode = getLayer("heat-mode") || "duration";
   if (state.mode === "browse") {
-    if (!state.browse.ir) { browseGraph.setStyles({}); return; }
+    if (!state.browse.ir) { browseGraph.setStyles({}); netronApplyHeat({}); return; }
     const heat = getLayer("layer-heat") ? heatStyles(state.browse.mapped, mode) : {};
+    if (state.useNetron) {
+      // official Netron viewer: color nodes through the bridge
+      const fillMap = {};
+      for (const [nid, color] of Object.entries(heat)) fillMap[nid] = color;
+      netronApplyHeat(fillMap);
+      if (!Object.keys(heat).length) { $("heat-min").textContent = "min"; $("heat-max").textContent = "max"; }
+      return;
+    }
     const styles = {};
     for (const [nid, fill] of Object.entries(heat)) styles[nid] = { fill };
     browseGraph.setStyles(styles);
@@ -671,7 +743,9 @@ function refreshLayerPanel() {
       rows.push(["layer-netron", "Netron 官方渲染（画布）", state.useNetron]);
     if (mode === "compare") rows.push(["layer-diff", "Diff 图层", getLayer("layer-diff")]);
     rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
-    rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
+    if (!(mode === "browse" && state.useNetron)) {
+      rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
+    }
     if (mode === "compare") {
       rows.push(["sync-view", "同步平移缩放", getLayer("sync-view") !== false]);
       rows.push(["diff-only", "仅看差异", getLayer("diff-only")]);
@@ -958,6 +1032,10 @@ function paletteNodeMatches(q) {
       const hay = `${n.id} ${n.display_name} ${n.op_type} ${(n.inputs || []).join(" ")} ${(n.outputs || []).join(" ")}`.toLowerCase();
       if (hay.includes(q)) out.push({ icon: "▪", label: `${n.display_name}`, sub: `${n.op_type}`, run: () => {
         setMode("browse");
+        if (state.useNetron) {
+          netronFocus(n.display_name || n.id);
+          return;
+        }
         browseGraph.focusNode(n.id); browseGraph.selectExternal(n.id);
         if (!browseGraph.expanded.has(n.id)) browseGraph.toggleExpand(n.id);
         showProps("browse", n.id);

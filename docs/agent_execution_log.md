@@ -111,3 +111,13 @@
 3. meta file 用绝对路径被 viewer _url() 拼成 /netron/netron/data/... 404 → 改相对路径 data/<id>.onnx。
 4. data 端点未剥 .onnx 后缀 → 404。
 最终浏览器验证：bodyClass="default"，Netron 官方渲染 UNet 完整（深色主题/主干居中/权重形状行/tensor shape 边标签/skip 弧线），106/106 测试通过。
+
+## 自研功能适配到 Netron 官方渲染（2026-11-01，用户需求）
+
+通过同源 iframe 直达官方 viewer 内部 API（window.__view__._target），实现三项桥接：
+1. **性能热力图**：遍历 `_target._table`（键=ONNX 节点对象、值=grapher.Node），按 key.name 匹配 profile 映射，把节点全部行（g.node-item > path）填充热力色；热力色板换深色系（深蓝→绿→黄→红）适配 Netron 深色主题白字；图例同步。
+2. **⌘K 节点搜索定位**：调 target.select([modelNode],'sidebar') + scrollTo，与 Netron 原生 Find 行为一致。
+3. Tensor 名开关在 Netron 模式下隐藏（viewer 原生显示）。
+新增 fixtures/profile_unet5.json（65 条合成测量，脚本内确定性生成）。
+调试记录：patch 三次静默失败（str.replace 无断言），改用带 assert 的补丁流程；_table 键为对象而非字符串；__heat expando 不能用 CSS 选择器查（改 class 标记 mtbx-heat）。
+106/106 测试通过。浏览器验证：57/65 节点着色（Constant 无测量记录不着色）、⌘K 定位 /up2/up/Resize 选中高亮、左通道弧线 + 右短支结构保持。

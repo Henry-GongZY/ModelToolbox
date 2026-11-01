@@ -11,6 +11,7 @@ Outputs:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -45,6 +46,29 @@ def main() -> None:
     torch.manual_seed(7)
     export_onnx(UNet5(), os.path.join(FIXTURES, "unet5_512.onnx"))
     export_onnx(UNet5Stem(), os.path.join(FIXTURES, "unet5_512_stem.onnx"))
+
+    # deterministic per-node profile sample (synthetic durations)
+    import random
+    random.seed(11)
+    from modeltoolbox.onnx_importer import load_onnx as _lo
+    _ir = _lo(os.path.join(FIXTURES, "unet5_512.onnx"), "gen")
+    base_us = {"Conv": 180, "Relu": 12, "MaxPool": 40, "Resize": 55, "Concat": 18,
+               "Add": 15, "Constant": 0.5, "Sigmoid": 12, "Mul": 9}
+    measurements = []
+    for _n in _ir.nodes:
+        if not _n.name:
+            continue
+        _base = base_us.get(_n.op_type, 20)
+        measurements.append({"node_name": _n.name, "op_type": _n.op_type,
+                             "duration": round(_base * (0.7 + random.random() * 0.6), 1),
+                             "calls": 1})
+    _profile = {"schema_version": 1, "model": "unet5_512.onnx",
+                "device": "synthetic-board", "unit": "us",
+                "end_to_end_us": round(sum(m["duration"] for m in measurements), 1),
+                "measurements": measurements}
+    with open(os.path.join(FIXTURES, "profile_unet5.json"), "w") as f:
+        json.dump(_profile, f, indent=1)
+    print(f"wrote profile_unet5.json ({len(measurements)} records)")
 
     # quick structural self-check through our own importer
     sys.path.insert(0, os.path.join(ROOT, "backend"))

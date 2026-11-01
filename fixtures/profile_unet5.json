@@ -1,0 +1,399 @@
+{
+ "schema_version": 1,
+ "model": "unet5_512.onnx",
+ "device": "synthetic-board",
+ "unit": "us",
+ "end_to_end_us": 4357.0,
+ "measurements": [
+  {
+   "node_name": "/inc/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 174.9,
+   "calls": 1
+  },
+  {
+   "node_name": "/inc/act1/Relu",
+   "op_type": "Relu",
+   "duration": 12.4,
+   "calls": 1
+  },
+  {
+   "node_name": "/inc/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 225.8,
+   "calls": 1
+  },
+  {
+   "node_name": "/inc/act2/Relu",
+   "op_type": "Relu",
+   "duration": 11.8,
+   "calls": 1
+  },
+  {
+   "node_name": "/down1/pool/MaxPool",
+   "op_type": "MaxPool",
+   "duration": 40.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/down1/block/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 189.4,
+   "calls": 1
+  },
+  {
+   "node_name": "/down1/block/act1/Relu",
+   "op_type": "Relu",
+   "duration": 9.7,
+   "calls": 1
+  },
+  {
+   "node_name": "/down1/block/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 181.3,
+   "calls": 1
+  },
+  {
+   "node_name": "/down1/block/act2/Relu",
+   "op_type": "Relu",
+   "duration": 12.9,
+   "calls": 1
+  },
+  {
+   "node_name": "/down2/pool/MaxPool",
+   "op_type": "MaxPool",
+   "duration": 47.0,
+   "calls": 1
+  },
+  {
+   "node_name": "/down2/block/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 136.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/down2/block/act1/Relu",
+   "op_type": "Relu",
+   "duration": 10.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/down2/block/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 135.8,
+   "calls": 1
+  },
+  {
+   "node_name": "/down2/block/act2/Relu",
+   "op_type": "Relu",
+   "duration": 14.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/down3/pool/MaxPool",
+   "op_type": "MaxPool",
+   "duration": 44.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/down3/block/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 130.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/down3/block/act1/Relu",
+   "op_type": "Relu",
+   "duration": 15.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/down3/block/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 230.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/down3/block/act2/Relu",
+   "op_type": "Relu",
+   "duration": 13.1,
+   "calls": 1
+  },
+  {
+   "node_name": "/down4/pool/MaxPool",
+   "op_type": "MaxPool",
+   "duration": 42.8,
+   "calls": 1
+  },
+  {
+   "node_name": "/down4/block/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 143.0,
+   "calls": 1
+  },
+  {
+   "node_name": "/down4/block/act1/Relu",
+   "op_type": "Relu",
+   "duration": 8.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/down4/block/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 183.1,
+   "calls": 1
+  },
+  {
+   "node_name": "/down4/block/act2/Relu",
+   "op_type": "Relu",
+   "duration": 8.8,
+   "calls": 1
+  },
+  {
+   "node_name": "/bottom/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 146.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/bottom/act1/Relu",
+   "op_type": "Relu",
+   "duration": 10.1,
+   "calls": 1
+  },
+  {
+   "node_name": "/bottom/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 129.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/bottom/act2/Relu",
+   "op_type": "Relu",
+   "duration": 11.7,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/up/Constant",
+   "op_type": "Constant",
+   "duration": 0.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/up/Constant_1",
+   "op_type": "Constant",
+   "duration": 0.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/up/Concat",
+   "op_type": "Concat",
+   "duration": 18.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/up/Resize",
+   "op_type": "Resize",
+   "duration": 59.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/Concat",
+   "op_type": "Concat",
+   "duration": 18.0,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/block/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 197.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/block/act1/Relu",
+   "op_type": "Relu",
+   "duration": 11.7,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/block/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 156.0,
+   "calls": 1
+  },
+  {
+   "node_name": "/up4/block/act2/Relu",
+   "op_type": "Relu",
+   "duration": 15.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/up/Constant",
+   "op_type": "Constant",
+   "duration": 0.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/up/Constant_1",
+   "op_type": "Constant",
+   "duration": 0.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/up/Concat",
+   "op_type": "Concat",
+   "duration": 20.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/up/Resize",
+   "op_type": "Resize",
+   "duration": 48.9,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/Concat",
+   "op_type": "Concat",
+   "duration": 15.1,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/block/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 157.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/block/act1/Relu",
+   "op_type": "Relu",
+   "duration": 8.9,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/block/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 208.8,
+   "calls": 1
+  },
+  {
+   "node_name": "/up3/block/act2/Relu",
+   "op_type": "Relu",
+   "duration": 11.3,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/up/Constant",
+   "op_type": "Constant",
+   "duration": 0.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/up/Constant_1",
+   "op_type": "Constant",
+   "duration": 0.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/up/Concat",
+   "op_type": "Concat",
+   "duration": 22.9,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/up/Resize",
+   "op_type": "Resize",
+   "duration": 66.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/Concat",
+   "op_type": "Concat",
+   "duration": 12.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/block/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 148.6,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/block/act1/Relu",
+   "op_type": "Relu",
+   "duration": 15.0,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/block/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 176.8,
+   "calls": 1
+  },
+  {
+   "node_name": "/up2/block/act2/Relu",
+   "op_type": "Relu",
+   "duration": 15.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/up/Constant",
+   "op_type": "Constant",
+   "duration": 0.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/up/Constant_1",
+   "op_type": "Constant",
+   "duration": 0.4,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/up/Concat",
+   "op_type": "Concat",
+   "duration": 19.4,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/up/Resize",
+   "op_type": "Resize",
+   "duration": 64.2,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/Concat",
+   "op_type": "Concat",
+   "duration": 15.5,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/block/conv1/Conv",
+   "op_type": "Conv",
+   "duration": 135.4,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/block/act1/Relu",
+   "op_type": "Relu",
+   "duration": 10.8,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/block/conv2/Conv",
+   "op_type": "Conv",
+   "duration": 230.1,
+   "calls": 1
+  },
+  {
+   "node_name": "/up1/block/act2/Relu",
+   "op_type": "Relu",
+   "duration": 13.9,
+   "calls": 1
+  },
+  {
+   "node_name": "/head/Conv",
+   "op_type": "Conv",
+   "duration": 138.7,
+   "calls": 1
+  }
+ ]
+}
