@@ -145,3 +145,12 @@
 - 确认两个事实：(1) 对比模式进入时 Diff 染色默认开（设计行为，与自研渲染一致）；(2) **关闭无效是真 bug**——Netron 分支的 netronApplyDiffTint 未读取开关。修复：关闭时向两侧 viewer 传空映射 → netronTintDiff 自带清除逻辑恢复 Netron 原生配色。
 - 调试中连环发现并修复：打包后开发服务器未重启（页面 404 的根因）；state.useNetronCompare 挂错位置（顶层 → state.compare 内）；桥接就绪判定只看模型 table，而 Netron 的 DOM 构建晚于 table——加"element 未就绪自动重试"（40×400ms）；桥接轮询窗口 12s→96s（双 viewer 并行解析更慢）；cb 异常不再被静默吞掉（写 __mtbxBridgeErr）；新增 window.__mtbx 调试钩子。
 - 浏览器全链路复验：默认染色开 → 关闭恢复原生 → 重开恢复染色，三态正确；106/106 测试通过。
+
+## 一致部分透明度可调 + 边语义修复（2026-11-02，用户需求）
+
+- 用户需求：Netron 对比渲染中，一致的层和连接降低透明度（可调），不一致的按原方案（染色）显示。
+- 实现：netronTintDiff 重构为 netronApplyDiffView——unchanged 节点加 g.mtbx-consistent 类（CSS var 控制透明度），diff kind 保留染色；**边**通过 Netron 的 `edge-<tensor名>` DOM id 定位（DiffIR edge_diffs 的 tensor 名直接可用，零 vendor 补丁），unchanged 边加 mtbx-consistent-edge、added/removed/changed 边染 stroke。
+- 图层面板：「一致部分透明度」滑杆（5–100%，默认 25%）实时生效（CSS var 即时更新，无需重染）；替代旧的"淡化相同节点"开关。
+- **边 diff 语义修复**：B 侧权重 tensor 名带 /unet 前缀导致 90 条假 changed 边——边的结构语义应为"两端节点配对即同一连接"（tensor 改名不是结构差异，节点级已报）。修复后 edge_unchanged=90、added=9、removed=2 全部真实。
+- 调试利器沉淀：index.html 注入 window.__errs 前置捕获（定位到 netronApplyDiffTint 重复声明——多轮补丁叠加的第二次教训）；app.js 顶层声明唯一性审计脚本。
+- 浏览器全链路验证：一致淡化 25%（56 节点+56 边/侧）、开 Diff 染色 → 差异节点/边染色 + 一致保持淡化、滑杆实时调节。106/106 测试通过。

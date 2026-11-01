@@ -7,6 +7,9 @@
 //   - in-place expandable node details (click), properties drawer, status bar
 import { apiPost, apiGet, apiDownload } from "./api.js";
 import { GraphView } from "./graph.js";
+import { initBridge, netronApplyHeat, netronApplyDiffTint, netronApplyDiffView,
+         netronFocusId, netronFocusByName, netronHideChrome, netronWireFollow,
+         netronSetConsistentOpacity } from "./mtbx-bridge.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,6 +21,7 @@ const state = {
     aModelId: null, bModelId: null, nodesA: {}, nodesB: {}, folded: new Set(),
     navIdx: -1, mappedA: null, mappedB: null, nameA: "", nameB: "",
     useNetronCompare: false, // dual official Netron viewers for compare mode
+    consistentOpacity: 0.25, // faded level for unchanged layers/connections
   },
   pytorch: { result: null, view: "overview" },
   useNetron: true, // browse canvas rendered by the vendored official Netron viewer
@@ -83,40 +87,7 @@ const browseGraph = new GraphView($("browse-graph"), {
   onEmptyClick: () => { browseGraph.collapseAll(); showProps("browse", null); },
   detailHTML: (id) => browseDetailHTML(id),
 });
-function netronFrameReadyId(frameId, cb) {
-  const f = $(frameId);
-  const ready = () => {
-    let w = null;
-    try {
-      w = f.contentWindow;
-      if (w && w.__view__ && w.__view__._target &&
-          w.__view__._target._table && w.__view__._target._table.size > 0) {
-        cb(w);
-        return true;
-      }
-    } catch (e) {
-      // surface callback errors instead of silently retrying forever
-      try { w.__mtbxBridgeErr = String(e && e.stack ? e.stack : e); } catch (e2) {}
-      return true; // stop retrying: the viewer is up but our callback failed
-    }
-    return false;
-  };
-  if (ready()) return;
-  let tries = 0;
-  const t = setInterval(() => { tries += 1; if (ready() || tries > 240) clearInterval(t); }, 400);
-}
 
-function netronHideChrome(frameId) {
-  const f = $(frameId);
-  netronFrameReadyId(frameId, (w) => {
-    const doc = f.contentDocument;
-    if (doc.getElementById("mtbx-style")) return;
-    const st = doc.createElement("style");
-    st.id = "mtbx-style";
-    st.textContent = ".toolbar, #menu-button, #titlebar { display: none !important; }";
-    doc.head.appendChild(st);
-  });
-}
 
 const DIFF_TINT = {
   added: "#1f6f43", removed: "#8f2f2f", op_changed: "#8f4a2f",
@@ -124,101 +95,16 @@ const DIFF_TINT = {
   param_changed: "#2f5a7d", connection_changed: "#4a4a2f", ambiguous: "#8a6d1f",
 };
 
-let netronFollowLock = false;
-
-function netronFocusId(frameId, nodeName, silent) {
-  netronFrameReadyId(frameId, (w) => {
-    const t = w.__view__._target;
-    for (const [modelNode, gnode] of t._table.entries()) {
-      if (modelNode && modelNode.name === nodeName && gnode) {
-        t.scrollTo(t.select([modelNode], null));
-        return;
-      }
-    }
-    if (!silent) toast("该节点在另一侧无对应（或为歧义）");
-  });
-}
-
-function netronWireFollow(frameId, side) {
-  const f = $(frameId);
-  netronFrameReadyId(frameId, () => {
-    if (f.__followWired) return;
-    f.__followWired = true;
-    const doc = f.contentDocument;
-    doc.addEventListener("click", (ev) => {
-      if (!$("sync-view") || !$("sync-view").checked) return;
-      if (state.mode !== "compare" || !state.compare.useNetronCompare) return;
-      if (netronFollowLock) return;
-      const g = ev.target && ev.target.closest && ev.target.closest("g.node");
-      if (!g) return;
-      const name = g.getAttribute("id");
-      if (!name) return;
-      const partner = findPartner(side, name);
-      if (!partner) return;
-      netronFollowLock = true;
-      const other = side === "a" ? "netron-frame-b" : "netron-frame-a";
-      netronFocusId(other, partner, true);
-      setTimeout(() => { netronFollowLock = false; }, 400);
-    }, true);
-  });
-}
-
-function netronDiffColorMaps() {
-  const mapA = {}, mapB = {};
-  const dimA = new Set(), dimB = new Set();
-  if (!state.compare.diff) return { mapA, mapB, dimA, dimB };
-  for (const nd of state.compare.diff.node_diffs) {
-    if (nd.kind === "unchanged") {
-      if (getLayer("diff-only")) {
-        if (nd.a_node_id) dimA.add(nd.a_node_id);
-        if (nd.b_node_id) dimB.add(nd.b_node_id);
-      }
-      continue;
-    }
-    if (nd.a_node_id) mapA[nd.a_node_id] = nd.kind;
-    if (nd.b_node_id) mapB[nd.b_node_id] = nd.kind;
-  }
-  return { mapA, mapB, dimA, dimB };
-}
-
-function netronTintDiff(frameId, side, colorMap, dimIds) {
-  netronFrameReadyId(frameId, (w) => {
-    try {
-    const doc = $(frameId).contentDocument;
-    doc.querySelectorAll("path.mtbx-heat").forEach((p) => {
-      p.classList.remove("mtbx-heat"); p.style.fill = "";
-    });
-    doc.querySelectorAll("g.mtbx-dim").forEach((g) => g.classList.remove("mtbx-dim"));
-    const target = w.__view__._target;
-    for (const [modelNode, gnode] of target._table.entries()) {
-      const name = modelNode && modelNode.name;
-      if (!name) continue;
-      const kind = colorMap[name];
-      if (gnode && gnode.element) {
-        const paths = gnode.element.querySelectorAll("g.node-item path");
-        if (kind && DIFF_TINT[kind]) {
-          for (const p of paths) { p.style.fill = DIFF_TINT[kind]; p.classList.add("mtbx-heat"); }
-        }
-        if (dimIds && dimIds.has(name)) gnode.element.classList.add("mtbx-dim");
-      }
-    }
-    } catch (e) { w.__mtbxBridgeErr = String(e && e.stack ? e.stack : e); }
-  });
-}
 
 
-function netronApplyDiffTint() {
-  if (!state.compare.useNetronCompare || !state.compare.diff) return;
-  // respect the "Diff 染色" toggle: when off, restore native colors
-  if (!getLayer("layer-diff")) {
-    netronTintDiff("netron-frame-a", "a", {}, new Set());
-    netronTintDiff("netron-frame-b", "b", {}, new Set());
-    return;
-  }
-  const { mapA, mapB, dimA, dimB } = netronDiffColorMaps();
-  netronTintDiff("netron-frame-a", "a", mapA, dimA);
-  netronTintDiff("netron-frame-b", "b", mapB, dimB);
-}
+
+
+
+
+
+
+
+
 
 function applyCompareNetronViews() {
   const fa = $("netron-frame-a"), fb = $("netron-frame-b");
@@ -236,6 +122,7 @@ function applyCompareNetronViews() {
     netronWireFollow("netron-frame-a", "a");
     netronWireFollow("netron-frame-b", "b");
     netronApplyDiffTint();
+    refreshLayerPanel();
   } else {
     fa.src = "about:blank"; fb.src = "about:blank";
     fa.classList.add("hidden"); fb.classList.add("hidden");
@@ -274,6 +161,16 @@ function mirrorTransform(src, dst) {
   dst._positionOverlays();
   syncing = false;
 }
+
+initBridge({
+    $: (id) => document.getElementById(id),
+    state,
+    getLayer,
+    DIFF_TINT,
+    toast,
+    setStatusText,
+    findPartner,
+});
 
 // ---------- mode & welcome ----------
 function hasContent() {
@@ -325,76 +222,8 @@ function setMode(mode) {
 
 // ---------- detail cards ----------
 // ---- Netron viewer bridge (iframe is same-origin; official viewer API) ----
-function netronFrameReady(cb) {
-  const f = $("netron-frame");
-  const ready = () => {
-    try {
-      const w = f.contentWindow;
-      if (w && w.__view__ && w.__view__._target &&
-          w.__view__._target._table && w.__view__._target._table.size > 0) {
-        cb(w);
-        return true;
-      }
-    } catch (e) { /* iframe not ready */ }
-    return false;
-  };
-  if (ready()) return;
-  let tries = 0;
-  const t = setInterval(() => {
-    tries += 1;
-    if (ready() || tries > 240) clearInterval(t);
-  }, 250);
-}
 
-function netronApplyHeat(heatMap, attempt) {
-  netronFrameReady((w) => {
-    const doc = $("netron-frame").contentDocument;
-    doc.querySelectorAll("path.mtbx-heat").forEach((p) => {
-      p.classList.remove("mtbx-heat");
-      p.style.fill = "";
-    });
-    let hit = 0;
-    let built = 0;
-    const target = w.__view__._target;
-    // the table is keyed by the ONNX node OBJECT; match by its .name and
-    // tint every row of the node (Netron rows are g.node-item > path)
-    for (const [modelNode, gnode] of target._table.entries()) {
-      const name = modelNode && modelNode.name;
-      if (!name) continue;
-      if (gnode && gnode.element) built += 1;
-      const color = heatMap[name];
-      if (color && gnode && gnode.element) {
-        const paths = gnode.element.querySelectorAll("g.node-item path");
-        if (paths.length) {
-          for (const p of paths) { p.style.fill = color; p.classList.add("mtbx-heat"); }
-          hit += 1;
-        }
-      }
-    }
-    // Netron builds node DOM after the model table exists — retry while no
-    // node element has been built yet.
-    if (built === 0 && (attempt || 0) < 40) {
-      setTimeout(() => netronApplyHeat(heatMap, (attempt || 0) + 1), 400);
-      return;
-    }
-    if (Object.keys(heatMap).length) {
-      setStatusText(hit ? `热力图已应用：${hit}/${Object.keys(heatMap).length} 节点着色（Netron 渲染）` : "热力图：Netron 中未匹配到节点", hit ? "ok" : "err");
-    }
-  });
-}
 
-function netronFocus(nodeName) {
-  netronFrameReady((w) => {
-    const t = w.__view__._target;
-    for (const [modelNode, gnode] of t._table.entries()) {
-      if (modelNode && modelNode.name === nodeName && gnode) {
-        t.scrollTo(t.select([modelNode], 'sidebar'));
-        return;
-      }
-    }
-    toast("该节点在 Netron 中无名称锚点（未命名节点）");
-  });
-}
 
 function fmtShape(vi) {
   if (!vi) return "";
@@ -930,7 +759,7 @@ function refreshLayerPanel() {
       rows.push(["layer-diff", "Diff 染色", getLayer("layer-diff")]);
       if (state.compare.useNetronCompare) {
         rows.push(["sync-view", "点击跟随对侧", getLayer("sync-view") !== false]);
-        rows.push(["diff-only", "淡化相同节点", getLayer("diff-only")]);
+        rows.push(["slider-consistent", "一致部分透明度", state.compare.consistentOpacity]);
       } else {
         rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
         rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
@@ -942,8 +771,15 @@ function refreshLayerPanel() {
       rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
     }
     const heatOn = getLayer("layer-heat");
-    $("lp-toggles").innerHTML = rows.map(([id, label, checked]) =>
-      `<label class="lp-toggle"><input type="checkbox" id="${id}" ${checked ? "checked" : ""}> ${esc(label)}</label>`).join("") +
+    $("lp-toggles").innerHTML = rows.map(([id, label, checked]) => {
+      if (id === "slider-consistent") {
+        return `<label class="lp-toggle">一致部分透明度
+          <input type="range" id="${id}" min="5" max="100" step="5"
+                 value="${Math.round((checked || 0.25) * 100)}" style="width:110px;margin-left:auto">
+          <span id="slider-consistent-val">${Math.round((checked || 0.25) * 100)}%</span></label>`;
+      }
+      return `<label class="lp-toggle"><input type="checkbox" id="${id}" ${checked ? "checked" : ""}> ${esc(label)}</label>`;
+    }).join("") +
       (heatOn ? `<label class="lp-toggle" style="color:var(--muted)">着色依据
         <select id="heat-mode" class="menu-select" style="margin-left:auto">
           <option value="duration" ${mode === "duration" ? "selected" : ""}>耗时</option>
@@ -960,6 +796,17 @@ function refreshLayerPanel() {
         if (id === "layer-netron-cmp") {
           state.compare.useNetronCompare = el.checked;
           applyCompareNetronViews();
+          return;
+        }
+        if (id === "slider-consistent") {
+          const applyV = () => {
+            const v = parseInt(el.value, 10) / 100;
+            const val = document.getElementById("slider-consistent-val");
+            if (val) val.textContent = el.value + "%";
+            netronSetConsistentOpacity(v);
+          };
+          applyV();
+          el.addEventListener("input", applyV);
           return;
         }
         if (id === "show-tensornames") {
@@ -1229,7 +1076,7 @@ function paletteNodeMatches(q) {
       if (hay.includes(q)) out.push({ icon: "▪", label: `${n.display_name}`, sub: `${n.op_type}`, run: () => {
         setMode("browse");
         if (state.useNetron) {
-          netronFocus(n.display_name || n.id);
+          netronFocusByName(n.display_name || n.id);
           return;
         }
         browseGraph.focusNode(n.id); browseGraph.selectExternal(n.id);
@@ -1462,7 +1309,7 @@ window.addEventListener("keydown", (e) => {
 
 // test/debug hook (also used by automation): expose module internals
 window.__mtbx = { state, applyCompareNetronViews, netronApplyDiffTint,
-  netronFocusId, netronTintDiff, refreshLayers, refreshLayerPanel };
+  netronFocusId, refreshLayers, refreshLayerPanel };
 
 // ---------- init ----------
 (async function init() {

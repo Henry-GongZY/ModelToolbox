@@ -336,7 +336,10 @@ def build_diff_ir(a: GraphIR, b: GraphIR, match: MatchResult) -> DiffIR:
         la, lb = ea_by_key.get(k, []), eb_by_key.get(k, [])
         if la and lb:
             ea, eb = la[0], lb[0]
-            kind = "unchanged" if ea.tensor == eb.tensor else "changed"
+            # Same node pair + ports == structurally the same connection.
+            # Tensor renames (e.g. a prefix-wrapped export) are NOT a
+            # structural edge change; they show up via node-level diffs.
+            kind = "unchanged"
         elif la:
             ea, eb, kind = la[0], None, "removed"
         else:

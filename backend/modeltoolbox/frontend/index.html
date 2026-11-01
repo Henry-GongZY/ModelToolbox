@@ -163,6 +163,12 @@
   <div>拖放 .onnx 模型文件以打开<div class="drop-sub">对比模式：一次拖入两个文件</div></div>
 </div>
 <div id="toast" class="hidden"></div>
+<script>
+window.__errs = [];
+window.addEventListener("error", function(e) {
+  window.__errs.push("E: " + String(e.message) + " @" + String(e.filename || "").split("/").pop() + ":" + e.lineno);
+});
+</script>
 <script type="module" src="app.js"></script>
 </body>
 </html>
