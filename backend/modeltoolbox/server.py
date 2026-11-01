@@ -30,8 +30,9 @@ from modeltoolbox.pytorch_importer import (
     load_pytorch_module,
 )
 
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "frontend")
+# Static assets live inside the package (works for repo checkouts and
+# pip-installed copies alike).
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
 
 MAX_BODY = 64 * 1024 * 1024  # 64MB request cap
 

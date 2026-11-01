@@ -12,24 +12,35 @@
 - **PyTorch 层级**：子进程隔离加载本地 `nn.Module` 层级，leaf 模块规则，FX 算子图捕获，失败可读降级。
 - **导出**：diff → JSON/CSV/Markdown/HTML；profile → JSON/CSV/Markdown。
 
-## 启动
+## 安装与启动
+
+### 方式一：从 PyPI 安装（推荐）
 
 ```bash
-# 1) 环境（Python ≥ 3.9）
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/pip install pytest onnx numpy        # 核心依赖
-.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu  # 可选：PyTorch 层级
-
-# 2) 生成合成示例 fixtures（可复现，全部合成数据）
-.venv/bin/python scripts/make_fixtures.py
-
-# 3) 启动本地服务
-.venv/bin/python -m modeltoolbox.server --port 8765
-
-# 4) 浏览器打开
-open http://127.0.0.1:8765
+pip install modeltoolbox
+modeltoolbox --port 8765          # 启动本地服务
+# 浏览器打开 http://127.0.0.1:8765
 ```
+
+可选 extras：
+
+```bash
+pip install "modeltoolbox[torch]"   # 启用 PyTorch 模块层级浏览
+```
+
+### 方式二：从源码开发
+
+```bash
+git clone https://github.com/Henry-GongZY/ModelToolbox && cd ModelToolbox
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"                # 核心依赖 + pytest
+.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu  # 可选
+.venv/bin/python scripts/make_fixtures.py        # 生成合成示例 fixtures
+.venv/bin/python -m modeltoolbox.server --port 8765
+```
+
+> 首次启动无需任何文件：欢迎页直接把 `.onnx` 拖进窗口即可；示例 fixtures
+> 由 `scripts/make_fixtures.py` / `scripts/make_unet_fixtures.py` 可复现生成。
 
 服务只绑定 `127.0.0.1`。模型/profile 通过**本地路径**加载（输入框填路径），不会离开本机。
 

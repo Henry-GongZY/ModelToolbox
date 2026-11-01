@@ -1,0 +1,2 @@
+recursive-include backend/modeltoolbox/frontend *
+recursive-include LICENSE README.md

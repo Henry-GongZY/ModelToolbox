@@ -130,3 +130,12 @@
 - 图层面板 compare+netron 模式的开关组合：Netron 官方渲染（双侧）/Diff 染色/点击跟随/淡化相同节点；热力与折叠面板在该模式隐藏（折叠在 Netron 无对应概念，组归属后续可用同色聚合表达）。
 - 调试教训：多处 patch 静默失败（str.replace 无断言）+ 一处 assert 失败导致整批未写盘 + 手术去重时误删存活声明——最终以"先全部断言、统一写盘、声明唯一性审计、node import 执行检查"的流程修复。修复过程中发现字段名笔误（useNetron vs useNetronCompare）。
 - 浏览器全链路验证：双 UNet 对比、染色、淡化、导航联动全部生效。106/106 测试通过。
+
+## PyPI 打包（2026-11-01，用户需求）
+
+- 项目名定为 `modeltoolbox`（PyPI 可用、与 import 包名一致；备选 modiff/onnx-diff 已占用）。
+- 结构改造：`frontend/` 移入包内（`backend/modeltoolbox/frontend/`，含 vendored netron viewer），server 的 FRONTEND_DIR 改为包内相对路径——仓库开发态与 pip 安装态同一路径解析。
+- `pyproject.toml`：console_scripts 入口 `modeltoolbox = modeltoolbox.server:main`、package-data（frontend/**）、license MIT、optional-deps（torch/dev）、urls、classifiers；新增 LICENSE（MIT，含 netron 归属）与 MANIFEST.in。
+- 构建：`python -m build` → modeltoolbox-0.2.0 wheel 3.8MB（179 个前端文件随包）+ sdist 3.7MB。
+- 冒烟（全新 venv、脱离仓库源码）：`pip install` wheel → `modeltoolbox --port 8799` → /api/health、/、/netron/view.js、模型加载、/netron/data 字节端点全 200；torch 缺失时优雅降级。
+- README 增加 PyPI 安装方式。106/106 测试通过。
