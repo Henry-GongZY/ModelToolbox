@@ -391,7 +391,7 @@ function gotoDiff(i) {
 }
 $("diff-summary-btn").addEventListener("click", () => {
   const p = $("props");
-  if (p.classList.contains("hidden")) { renderDiffSummary(); }
+  if (p.classList.contains("hidden")) { renderDiffSummary(); openProps(); }
   else { p.classList.add("hidden"); }
 });
 $("diff-prev").addEventListener("click", () => gotoDiff((state.compare.navIdx === -1 ? 0 : state.compare.navIdx) - 1));
