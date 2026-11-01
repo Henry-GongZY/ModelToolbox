@@ -121,3 +121,12 @@
 新增 fixtures/profile_unet5.json（65 条合成测量，脚本内确定性生成）。
 调试记录：patch 三次静默失败（str.replace 无断言），改用带 assert 的补丁流程；_table 键为对象而非字符串；__heat expando 不能用 CSS 选择器查（改 class 标记 mtbx-heat）。
 106/106 测试通过。浏览器验证：57/65 节点着色（Constant 无测量记录不着色）、⌘K 定位 /up2/up/Resize 选中高亮、左通道弧线 + 右短支结构保持。
+
+## 双 Netron 对比视图（2026-11-01，用户需求"多套netron渲染"）
+
+- 架构：双 iframe 各跑一个独立官方 Netron viewer（单例假设保持不变，隔离干净），同源桥接叠加 diff 能力；iframe 内注入 CSS 隐藏 viewer 自有 chrome（toolbar/menu/titlebar）。
+- diff 叠加：`netronTintDiff` 按 DiffIR 节点 kind 染色行背景（added 绿/removed 红/modified 橙红系/ambiguous 黄），「淡化相同节点」= unchanged 节点 g.mtbx-dim 透明度降低（对应"仅看差异"）；「点击跟随」= A 侧点击节点 → match partner → B 侧 select+scrollTo（防循环锁）；差异导航 ◀▶ 双侧同时定位。
+- server：diff 会话注册 A/B 模型 raw 字节（path/upload 双入口），供 /netron/data 端点。
+- 图层面板 compare+netron 模式的开关组合：Netron 官方渲染（双侧）/Diff 染色/点击跟随/淡化相同节点；热力与折叠面板在该模式隐藏（折叠在 Netron 无对应概念，组归属后续可用同色聚合表达）。
+- 调试教训：多处 patch 静默失败（str.replace 无断言）+ 一处 assert 失败导致整批未写盘 + 手术去重时误删存活声明——最终以"先全部断言、统一写盘、声明唯一性审计、node import 执行检查"的流程修复。修复过程中发现字段名笔误（useNetron vs useNetronCompare）。
+- 浏览器全链路验证：双 UNet 对比、染色、淡化、导航联动全部生效。106/106 测试通过。

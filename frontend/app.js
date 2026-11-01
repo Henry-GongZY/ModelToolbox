@@ -23,6 +23,7 @@ const state = {
   detailCache: { a: {}, b: {} },
   pendingCompare: { a: null, b: null },
   layerPanelClosed: false,
+  useNetronCompare: false, // dual official Netron viewers for compare mode
 };
 
 // ---------- tiny helpers ----------
@@ -82,6 +83,154 @@ const browseGraph = new GraphView($("browse-graph"), {
   onEmptyClick: () => { browseGraph.collapseAll(); showProps("browse", null); },
   detailHTML: (id) => browseDetailHTML(id),
 });
+function netronFrameReadyId(frameId, cb) {
+  const f = $(frameId);
+  const ready = () => {
+    try {
+      const w = f.contentWindow;
+      if (w && w.__view__ && w.__view__._target &&
+          w.__view__._target._table && w.__view__._target._table.size > 0) {
+        cb(w);
+        return true;
+      }
+    } catch (e) { /* not ready */ }
+    return false;
+  };
+  if (ready()) return;
+  let tries = 0;
+  const t = setInterval(() => { tries += 1; if (ready() || tries > 48) clearInterval(t); }, 250);
+}
+
+function netronHideChrome(frameId) {
+  const f = $(frameId);
+  netronFrameReadyId(frameId, (w) => {
+    const doc = f.contentDocument;
+    if (doc.getElementById("mtbx-style")) return;
+    const st = doc.createElement("style");
+    st.id = "mtbx-style";
+    st.textContent = ".toolbar, #menu-button, #titlebar { display: none !important; }";
+    doc.head.appendChild(st);
+  });
+}
+
+const DIFF_TINT = {
+  added: "#1f6f43", removed: "#8f2f2f", op_changed: "#8f4a2f",
+  attr_changed: "#7d5a2f", shape_changed: "#7d2f5a", dtype_changed: "#5a2f7d",
+  param_changed: "#2f5a7d", connection_changed: "#4a4a2f", ambiguous: "#8a6d1f",
+};
+
+let netronFollowLock = false;
+
+function netronFocusId(frameId, nodeName, silent) {
+  netronFrameReadyId(frameId, (w) => {
+    const t = w.__view__._target;
+    for (const [modelNode, gnode] of t._table.entries()) {
+      if (modelNode && modelNode.name === nodeName && gnode) {
+        t.scrollTo(t.select([modelNode], null));
+        return;
+      }
+    }
+    if (!silent) toast("该节点在另一侧无对应（或为歧义）");
+  });
+}
+
+function netronWireFollow(frameId, side) {
+  const f = $(frameId);
+  netronFrameReadyId(frameId, () => {
+    if (f.__followWired) return;
+    f.__followWired = true;
+    const doc = f.contentDocument;
+    doc.addEventListener("click", (ev) => {
+      if (!$("sync-view") || !$("sync-view").checked) return;
+      if (state.mode !== "compare" || !state.compare.useNetronCompare) return;
+      if (netronFollowLock) return;
+      const g = ev.target && ev.target.closest && ev.target.closest("g.node");
+      if (!g) return;
+      const name = g.getAttribute("id");
+      if (!name) return;
+      const partner = findPartner(side, name);
+      if (!partner) return;
+      netronFollowLock = true;
+      const other = side === "a" ? "netron-frame-b" : "netron-frame-a";
+      netronFocusId(other, partner, true);
+      setTimeout(() => { netronFollowLock = false; }, 400);
+    }, true);
+  });
+}
+
+function netronDiffColorMaps() {
+  const mapA = {}, mapB = {};
+  const dimA = new Set(), dimB = new Set();
+  if (!state.compare.diff) return { mapA, mapB, dimA, dimB };
+  for (const nd of state.compare.diff.node_diffs) {
+    if (nd.kind === "unchanged") {
+      if (getLayer("diff-only")) {
+        if (nd.a_node_id) dimA.add(nd.a_node_id);
+        if (nd.b_node_id) dimB.add(nd.b_node_id);
+      }
+      continue;
+    }
+    if (nd.a_node_id) mapA[nd.a_node_id] = nd.kind;
+    if (nd.b_node_id) mapB[nd.b_node_id] = nd.kind;
+  }
+  return { mapA, mapB, dimA, dimB };
+}
+
+function netronTintDiff(frameId, side, colorMap, dimIds) {
+  netronFrameReadyId(frameId, (w) => {
+    const doc = $(frameId).contentDocument;
+    doc.querySelectorAll("path.mtbx-heat").forEach((p) => {
+      p.classList.remove("mtbx-heat"); p.style.fill = "";
+    });
+    doc.querySelectorAll("g.mtbx-dim").forEach((g) => g.classList.remove("mtbx-dim"));
+    const target = w.__view__._target;
+    for (const [modelNode, gnode] of target._table.entries()) {
+      const name = modelNode && modelNode.name;
+      if (!name) continue;
+      const kind = colorMap[name];
+      if (gnode && gnode.element) {
+        const paths = gnode.element.querySelectorAll("g.node-item path");
+        if (kind && DIFF_TINT[kind]) {
+          for (const p of paths) { p.style.fill = DIFF_TINT[kind]; p.classList.add("mtbx-heat"); }
+        }
+        if (dimIds && dimIds.has(name)) gnode.element.classList.add("mtbx-dim");
+      }
+    }
+  });
+}
+
+
+function netronApplyDiffTint() {
+  if (!state.compare.useNetronCompare || !state.compare.diff) return;
+  const { mapA, mapB, dimA, dimB } = netronDiffColorMaps();
+  netronTintDiff("netron-frame-a", "a", mapA, dimA);
+  netronTintDiff("netron-frame-b", "b", mapB, dimB);
+}
+
+function applyCompareNetronViews() {
+  const fa = $("netron-frame-a"), fb = $("netron-frame-b");
+  const on = state.compare.useNetronCompare;
+  const urlA = "/netron/?model=" + state.compare.aModelId;
+  const urlB = "/netron/?model=" + state.compare.bModelId;
+  if (on) {
+    if (!fa.src.endsWith(urlA)) fa.src = urlA;
+    if (!fb.src.endsWith(urlB)) fb.src = urlB;
+    fa.classList.remove("hidden"); fb.classList.remove("hidden");
+    $("cmp-graph-a").classList.add("hidden");
+    $("cmp-graph-b").classList.add("hidden");
+    netronHideChrome("netron-frame-a");
+    netronHideChrome("netron-frame-b");
+    netronWireFollow("netron-frame-a", "a");
+    netronWireFollow("netron-frame-b", "b");
+    netronApplyDiffTint();
+  } else {
+    fa.src = "about:blank"; fb.src = "about:blank";
+    fa.classList.add("hidden"); fb.classList.add("hidden");
+    $("cmp-graph-a").classList.remove("hidden");
+    $("cmp-graph-b").classList.remove("hidden");
+  }
+}
+
 const graphA = new GraphView($("cmp-graph-a"), {
   onSelect: (id) => { showProps("a", id); },
   onEmptyClick: () => { graphA.collapseAll(); showProps("a", null); },
@@ -479,8 +628,11 @@ function applyDiffResult(res, dt, nameA, nameB) {
   const exA = {}, exB = {};
   for (const [id, n] of Object.entries(state.compare.nodesA)) exA[id] = { op: n.display || n.op, outTensors: n.outputs };
   for (const [id, n] of Object.entries(state.compare.nodesB)) exB[id] = { op: n.display || n.op, outTensors: n.outputs };
-  graphA.setData(res.layouts.a, exA);
-  graphB.setData(res.layouts.b, exB);
+  applyCompareNetronViews();
+  if (!state.compare.useNetronCompare) {
+    graphA.setData(res.layouts.a, exA);
+    graphB.setData(res.layouts.b, exB);
+  }
   renderDiffSummary();
   renderFoldGroups();
   refreshLayers();
@@ -589,6 +741,11 @@ function gotoDiff(i) {
   state.compare.navIdx = ((i % list.length) + list.length) % list.length;
   const nd = list[state.compare.navIdx];
   $("diff-nav-pos").textContent = `${state.compare.navIdx + 1}/${list.length}`;
+  if (state.compare.useNetronCompare) {
+    if (nd.a_node_id) netronFocusId("netron-frame-a", nd.a_node_id, true);
+    if (nd.b_node_id) netronFocusId("netron-frame-b", nd.b_node_id, true);
+    return;
+  }
   if (nd.a_node_id) { graphA.focusNode(nd.a_node_id); graphA.selectExternal(nd.a_node_id); }
   if (nd.b_node_id) { graphB.focusNode(nd.b_node_id); graphB.selectExternal(nd.b_node_id); }
 }
@@ -597,6 +754,11 @@ $("diff-next").addEventListener("click", () => gotoDiff(state.compare.navIdx + 1
 
 function renderFoldGroups() {
   const groups = state.compare.folding.groups;
+  if (state.compare.useNetronCompare) {
+    // Netron has no fold concept — group membership is conveyed by tint in
+    // a later pass; hide the fold checkboxes here.
+    return;
+  }
   if (!groups.length) return;
   openProps();
   const body = $("props-body");
@@ -710,6 +872,7 @@ function refreshLayers() {
     for (const [nid, fill] of Object.entries(heat)) styles[nid] = { fill };
     browseGraph.setStyles(styles);
   } else if (state.mode === "compare") {
+    if (state.compare.useNetronCompare) { netronApplyDiffTint(); return; }
     if (!state.compare.diff) return;
     const useDiff = getLayer("layer-diff");
     const only = getLayer("diff-only");
@@ -741,14 +904,21 @@ function refreshLayerPanel() {
     const rows = [];
     if (mode === "browse" && state.browse.modelId)
       rows.push(["layer-netron", "Netron 官方渲染（画布）", state.useNetron]);
-    if (mode === "compare") rows.push(["layer-diff", "Diff 图层", getLayer("layer-diff")]);
-    rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
-    if (!(mode === "browse" && state.useNetron)) {
-      rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
-    }
     if (mode === "compare") {
-      rows.push(["sync-view", "同步平移缩放", getLayer("sync-view") !== false]);
-      rows.push(["diff-only", "仅看差异", getLayer("diff-only")]);
+      rows.push(["layer-netron-cmp", "Netron 官方渲染（双侧）", state.compare.useNetronCompare]);
+      rows.push(["layer-diff", "Diff 染色", getLayer("layer-diff")]);
+      if (state.compare.useNetronCompare) {
+        rows.push(["sync-view", "点击跟随对侧", getLayer("sync-view") !== false]);
+        rows.push(["diff-only", "淡化相同节点", getLayer("diff-only")]);
+      } else {
+        rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
+        rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
+        rows.push(["sync-view", "同步平移缩放", getLayer("sync-view") !== false]);
+        rows.push(["diff-only", "仅看差异", getLayer("diff-only")]);
+      }
+    } else {
+      rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
+      rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
     }
     const heatOn = getLayer("layer-heat");
     $("lp-toggles").innerHTML = rows.map(([id, label, checked]) =>
@@ -764,6 +934,11 @@ function refreshLayerPanel() {
         if (id === "layer-netron") {
           state.useNetron = el.checked;
           applyBrowseRenderer();
+          return;
+        }
+        if (id === "layer-netron-cmp") {
+          state.compare.useNetronCompare = el.checked;
+          applyCompareNetronViews();
           return;
         }
         if (id === "show-tensornames") {
@@ -1263,6 +1438,10 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "d" || e.key === "D") { e.preventDefault(); openCompareDialog(); }
   else if (e.key === "f" || e.key === "F") { runAction("fit"); }
 });
+
+// test/debug hook (also used by automation): expose module internals
+window.__mtbx = { state, applyCompareNetronViews, netronApplyDiffTint,
+  netronFocusId, netronTintDiff, refreshLayers, refreshLayerPanel };
 
 // ---------- init ----------
 (async function init() {

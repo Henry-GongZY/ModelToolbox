@@ -402,15 +402,17 @@ class Handler(BaseHTTPRequestHandler):
             name_a = body.get("name_a") or "model_a.onnx"
             name_b = body.get("name_b") or "model_b.onnx"
             try:
-                a = load_onnx_bytes(_b64.b64decode(data_a, validate=True),
-                                    uuid.uuid4().hex[:12], source_path=name_a)
-                b = load_onnx_bytes(_b64.b64decode(data_b, validate=True),
-                                    uuid.uuid4().hex[:12], source_path=name_b)
+                raw_a = _b64.b64decode(data_a, validate=True)
+                raw_b = _b64.b64decode(data_b, validate=True)
+                a = load_onnx_bytes(raw_a, uuid.uuid4().hex[:12], source_path=name_a)
+                b = load_onnx_bytes(raw_b, uuid.uuid4().hex[:12], source_path=name_b)
             except Exception as e:
                 if isinstance(e, ModelLoadError):
                     raise
                 raise ModelLoadError(f"invalid uploaded model payload: {e}")
         elif path_a and path_b:
+            raw_a = open(path_a, "rb").read()
+            raw_b = open(path_b, "rb").read()
             a = load_onnx(path_a, uuid.uuid4().hex[:12])
             b = load_onnx(path_b, uuid.uuid4().hex[:12])
         else:
@@ -429,8 +431,9 @@ class Handler(BaseHTTPRequestHandler):
                                     "diff": diff, "folding": folding,
                                     "ts": time.time()}
             # expose the pair as loadable models so profiles can map to them
-            STORE.models[a.model_id] = {"ir": a, "ts": time.time()}
-            STORE.models[b.model_id] = {"ir": b, "ts": time.time()}
+            # and the vendored Netron viewer can render the raw bytes
+            STORE.models[a.model_id] = {"ir": a, "raw": raw_a, "ts": time.time()}
+            STORE.models[b.model_id] = {"ir": b, "raw": raw_b, "ts": time.time()}
             STORE.gc()
         self._json({
             "diff_id": diff_id,
