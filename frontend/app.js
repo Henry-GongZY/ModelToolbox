@@ -150,6 +150,7 @@ function setMode(mode) {
   $("compare-header").classList.toggle("hidden", mode !== "compare");
   $("diff-nav").classList.toggle("hidden", mode !== "compare");
   if (mode === "compare") setLayer("layer-diff", true);
+  if (mode === "browse") applyBrowseRenderer();
   $("sb-right").textContent =
     mode === "compare" ? `对比 · A ${state.compare.nameA} ⇄ B ${state.compare.nameB}`
     : mode === "pytorch" ? "PyTorch 层级"
@@ -296,6 +297,7 @@ async function openModelFile(file) {
     for (const n of res.ir.nodes) extra[n.id] = { op: n.op_type, outTensors: n.outputs.filter(Boolean) };
     browseGraph.setData(res.layout, extra);
     setMode("browse");
+    applyBrowseRenderer();
     setStatusText(`${res.meta.name} — ${res.meta.node_count} 节点 / ${res.meta.edge_count} 边 (${dt}ms)`);
     if ((res.meta.warnings || []).length) {
       toast(`⚠ ${res.meta.warnings.length} 条解析警告（详见模型属性）`, 3400);
@@ -685,6 +687,11 @@ function refreshLayerPanel() {
     for (const [id, , ] of rows) {
       const el = $(id);
       if (el) el.addEventListener("change", () => {
+        if (id === "layer-netron") {
+          state.useNetron = el.checked;
+          applyBrowseRenderer();
+          return;
+        }
         if (id === "show-tensornames") {
           [browseGraph, graphA, graphB, ptGraph].forEach((g) => {
             g.opts.showTensorNames = el.checked;

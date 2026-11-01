@@ -154,7 +154,9 @@ class Handler(BaseHTTPRequestHandler):
             model_id = (parse_qs(parsed.query).get("model") or [None])[0]
             meta = '<meta name="version" content="9.3.4">'
             if model_id:
-                meta += ('\n<meta name="file" content="/netron/data/'
+                # relative path: the viewer's _url() joins it with the page
+                # directory (/netron/), producing /netron/data/<id>.onnx
+                meta += ('\n<meta name="file" content="data/'
                          + model_id + '.onnx">')
             import re as _re
             html = _re.sub(r'<meta name="version" content=".*">', meta, html)

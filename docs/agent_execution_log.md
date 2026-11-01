@@ -102,3 +102,12 @@
 - 前端：browse 单模型画布默认切换为 Netron viewer（iframe），图层面板提供「Netron 官方渲染（画布）」开关；自研渲染保留（对比模式的双模型 diff/折叠是 Netron 没有的能力）。
 - 修复路由 bug：前缀剥离偏移（[8:]→[7:]）、默认页归一路径、data 端点剥 .onnx 后缀、坏文件 OSError→ModelLoadError。
 - 测试 103→106（+netron 路由测试）。浏览器验证：UNet 在 ModelToolbox 内以官方 Netron 结构渲染，左右分野与 netron.app 一致。
+
+## 修复 Netron viewer 集成三连（2026-11-01）
+
+用户反馈"勾选 Netron 官方渲染没有任何显示差异"。排查发现实装只完成一半（patch 静默失败：applyBrowseRenderer 无调用点、toggle 无 handler）——此前用户看到的其实是自研布局的输出。补齐 3 个调用点后暴露后续 4 个真实缺陷，逐一修复：
+1. preload require 链缺失模块（hdf5/flatbuffers/flexbuffers/tar/python 等）→ terminate 于欢迎页黑屏。修复：vendor 全量官方 js（28MB，按包整拷）。
+2. GA 遥测 + ipinfo.io 外呼违反本地优先原则 → browser.js 去除 consent/telemetry 流程，base.js Telemetry 永久 _enabled=false（send no-op），记入 NETRON-LICENSE.md 修改声明。
+3. meta file 用绝对路径被 viewer _url() 拼成 /netron/netron/data/... 404 → 改相对路径 data/<id>.onnx。
+4. data 端点未剥 .onnx 后缀 → 404。
+最终浏览器验证：bodyClass="default"，Netron 官方渲染 UNet 完整（深色主题/主干居中/权重形状行/tensor shape 边标签/skip 弧线），106/106 测试通过。

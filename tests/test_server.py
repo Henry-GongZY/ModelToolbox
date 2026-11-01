@@ -290,7 +290,7 @@ def test_netron_viewer_routes(server):
     # viewer shell with injected file meta
     with urllib.request.urlopen(server + "/netron/?model=" + mid, timeout=30) as r:
         html = r.read().decode()
-    assert r.status == 200 and 'name="file"' in html and f"/netron/data/{mid}.onnx" in html
+    assert r.status == 200 and 'name="file"' in html and f'content="data/{mid}.onnx"' in html
     # static asset
     with urllib.request.urlopen(server + "/netron/view.js", timeout=30) as r:
         assert r.status == 200
