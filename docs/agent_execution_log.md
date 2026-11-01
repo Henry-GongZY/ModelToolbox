@@ -93,3 +93,12 @@
 3. skip 弧线方向随目标摆动会撞侧链：固定**走左侧通道**（dir=-1），右侧留给短侧链。
 另：伪 IO 节点跟随 anchor 列；fitView 最小缩放 0.55。
 浏览器复验（decoder 区域）：主干垂直居中偏左、右侧 scales 短支、左侧长 skip 弧线通道——与 Netron 第二张图同构。103/103 测试通过。
+
+## 内嵌 Netron 官方 viewer（2026-11-01，用户要求"完全照搬"）
+
+用户要求渲染逻辑完全照搬 Netron（开源 MIT）。方案从"模仿"升级为"直接 vendor 官方 viewer"：
+- `frontend/netron/`：从 pip 包 netron 9.3.4 复制官方 viewer（index/view/grapher/base/onnx 等 18 个文件，按 import 闭包取最小集），保留 MIT 归属（NETRON-LICENSE.md）。
+- 后端：`/netron/` 静态路由（路径遍历防护）+ index.html 注入 `<meta name="file" content="/netron/data/<id>.onnx">`（模仿 netron.server 的注入方式）+ `/netron/data/<id>.onnx` 返回会话内原始模型字节；STORE.models 增加 raw 字段（path/upload 双入口）。
+- 前端：browse 单模型画布默认切换为 Netron viewer（iframe），图层面板提供「Netron 官方渲染（画布）」开关；自研渲染保留（对比模式的双模型 diff/折叠是 Netron 没有的能力）。
+- 修复路由 bug：前缀剥离偏移（[8:]→[7:]）、默认页归一路径、data 端点剥 .onnx 后缀、坏文件 OSError→ModelLoadError。
+- 测试 103→106（+netron 路由测试）。浏览器验证：UNet 在 ModelToolbox 内以官方 Netron 结构渲染，左右分野与 netron.app 一致。

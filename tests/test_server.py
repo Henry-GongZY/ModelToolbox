@@ -278,3 +278,28 @@ def test_profile_upload(server):
         "model_id": m["model_id"]})
     assert status == 200
     assert body["mapped"]["coverage"] == 1.0
+
+
+def test_netron_viewer_routes(server):
+    import base64 as b64mod
+    with open(fx("linear.onnx"), "rb") as f:
+        raw = f.read()
+    status, m = _post(server + "/api/model/upload",
+                      {"name": "linear.onnx", "data_base64": b64mod.b64encode(raw).decode()})
+    mid = m["model_id"]
+    # viewer shell with injected file meta
+    with urllib.request.urlopen(server + "/netron/?model=" + mid, timeout=30) as r:
+        html = r.read().decode()
+    assert r.status == 200 and 'name="file"' in html and f"/netron/data/{mid}.onnx" in html
+    # static asset
+    with urllib.request.urlopen(server + "/netron/view.js", timeout=30) as r:
+        assert r.status == 200
+    # raw model bytes
+    with urllib.request.urlopen(server + f"/netron/data/{mid}.onnx", timeout=30) as r:
+        assert r.read() == raw
+    # unknown session -> 404
+    try:
+        urllib.request.urlopen(server + "/netron/data/zzz.onnx", timeout=30)
+        assert False
+    except urllib.error.HTTPError as e:
+        assert e.code == 404

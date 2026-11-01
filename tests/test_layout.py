@@ -62,6 +62,36 @@ def test_wide_branchy_graph_stays_horizontal():
     assert lr.boxes["a"].x > lr.boxes["n0"].x
 
 
+def test_vertical_side_chain_gets_separate_channel():
+    """Deep vertical graphs keep feeder branches beside the spine."""
+    ir = make_ir(
+        nodes=[("n0", "Conv", ["x"], ["t0"])] +
+              [(f"n{i}", "Relu", [f"t{i-1}"], [f"t{i}"]) for i in range(1, 7)] +
+              [("aux0", "Shape", ["t1"], ["shape"]),
+               ("aux1", "Constant", [], ["axes"]),
+               ("aux2", "Reshape", ["shape", "axes"], ["side"]),
+               ("join", "Add", ["t6", "side"], ["y"])],
+        inputs=[("x", "FLOAT", [1])], outputs=[("y", "FLOAT", [1])],
+        model_id="side-channel",
+    )
+    lr = layout_single(ir)
+    assert lr.orientation == "vertical"
+    spine_x = lr.boxes["n3"].x
+    assert spine_x == lr.boxes["n6"].x
+    assert lr.boxes["aux0"].x > spine_x
+    assert lr.boxes["aux2"].x > spine_x
+    assert lr.x_origin > 0
+
+
+def test_vertical_diff_preserves_skip_channel():
+    a = _linear()
+    b = _linear()
+    la, lb = layout_diff_pair(a, b, [])
+    assert la.orientation == lb.orientation == "vertical"
+    assert la.x_origin == lb.x_origin > 0
+    assert min(box.x for box in la.boxes.values()) >= la.x_origin
+
+
 def test_branch_join_same_rank_no_overlap():
     ir = make_ir(
         nodes=[("c", "Conv", ["x", "w"], ["c1"]), ("r", "Relu", ["c1"], ["r1"]),

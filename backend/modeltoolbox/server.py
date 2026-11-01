@@ -109,6 +109,63 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ---- vendored Netron viewer (official MIT frontend, see frontend/netron/) ----
+
+    NETRON_DIR = os.path.join(FRONTEND_DIR, "netron")
+    NETRON_MIME = {
+        ".html": "text/html; charset=utf-8", ".js": "text/javascript",
+        ".css": "text/css", ".json": "application/json",
+        ".png": "image/png", ".ico": "image/x-icon",
+    }
+
+    def _serve_netron(self, path: str):
+        from urllib.parse import urlparse, parse_qs, unquote
+        parsed = urlparse(path)
+        sub = parsed.path
+        if sub in ("/netron", "/netron/"):
+            sub = "/netron/index.html"
+        sub = unquote(sub)
+        if sub.startswith("/netron/data/"):
+            model_id = os.path.basename(sub)
+            if model_id.endswith(".onnx"):
+                model_id = model_id[:-len(".onnx")]
+            with STORE.lock:
+                rec = STORE.models.get(model_id)
+            raw = rec.get("raw") if rec else None
+            if raw is None:
+                self._error("no such model session", 404, "not_found")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        fp = os.path.normpath(os.path.join(self.NETRON_DIR, sub[len("/netron/"):]))
+        if not fp.startswith(self.NETRON_DIR) or not os.path.isfile(fp):
+            self._error(f"netron: not found {sub}", 404, "not_found")
+            return
+        with open(fp, "rb") as f:
+            body = f.read()
+        ctype = self.NETRON_MIME.get(os.path.splitext(fp)[1], "application/octet-stream")
+        if sub == "/netron/index.html":
+            html = body.decode("utf-8")
+            model_id = (parse_qs(parsed.query).get("model") or [None])[0]
+            meta = '<meta name="version" content="9.3.4">'
+            if model_id:
+                meta += ('\n<meta name="file" content="/netron/data/'
+                         + model_id + '.onnx">')
+            import re as _re
+            html = _re.sub(r'<meta name="version" content=".*">', meta, html)
+            body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     # ---- routing ----
     def do_GET(self):
         try:
@@ -119,6 +176,8 @@ class Handler(BaseHTTPRequestHandler):
                             "sessions": {k: len(v) for k, v in (
                                 ("models", STORE.models), ("diffs", STORE.diffs),
                                 ("profiles", STORE.profiles))}})
+            elif p.startswith("/netron"):
+                self._serve_netron(self.path)
             elif p.startswith("/api/"):
                 self._error("unknown API endpoint", 404, "not_found")
             else:
@@ -199,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
         ir = load_onnx_bytes(data, model_id, source_path=name)
         layout = layout_single(ir)
         with STORE.lock:
-            STORE.models[model_id] = {"ir": ir, "ts": time.time()}
+            STORE.models[model_id] = {"ir": ir, "raw": data, "ts": time.time()}
             STORE.gc()
         self._json(self._model_payload(ir, layout))
 
@@ -306,11 +365,16 @@ class Handler(BaseHTTPRequestHandler):
         path = body.get("path")
         if not path or not isinstance(path, str):
             self._error("'path' is required"); return
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            raise ModelLoadError(f"cannot read model file '{path}': {e}") from e
         model_id = uuid.uuid4().hex[:12]
         ir = load_onnx(path, model_id)
         layout = layout_single(ir)
         with STORE.lock:
-            STORE.models[model_id] = {"ir": ir, "ts": time.time()}
+            STORE.models[model_id] = {"ir": ir, "raw": raw, "ts": time.time()}
             STORE.gc()
         self._json(self._model_payload(ir, layout))
 

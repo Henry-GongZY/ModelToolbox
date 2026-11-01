@@ -41,7 +41,9 @@ function opColor(op) {
 export class GraphView {
   constructor(container, opts = {}) {
     this.container = container;
-    this.opts = opts; // onSelect, onEmptyClick, onExpand, detailHTML(id)->string|null, showTensorNames
+    // Edge tensor labels are optional. Keep the initial canvas aligned with
+    // the unchecked "show tensor names" control and Netron's cleaner default.
+    this.opts = { showTensorNames: false, ...opts }; // onSelect, onEmptyClick, onExpand, detailHTML(id)->string|null
     this.svg = el("svg");
     this.viewport = el("g", { class: "viewport" });
     this.edgeLayer = el("g", { class: "edges" });
@@ -199,10 +201,16 @@ export class GraphView {
     let scale = Math.min((vw - pad * 2) / w, (vh - pad * 2) / h, 1.5);
     if (scale < 0.45) {
       // very wide/tall graphs (e.g. deep chains): don't shrink into
-      // illegibility — fit the height, anchor top-left, let the user pan.
+      // illegibility — keep a readable scale and anchor the long axis at top.
+      // If the graph still fits across the viewport, center it horizontally
+      // instead of leaving the unused width on one side.
       scale = 0.55;
       this.scale = scale;
-      this.tx = pad - x0 * scale;
+      const availableWidth = Math.max(vw - pad * 2, 0);
+      const scaledWidth = w * scale;
+      this.tx = scaledWidth <= availableWidth
+        ? (vw - scaledWidth) / 2 - x0 * scale
+        : pad - x0 * scale;
       this.ty = pad - y0 * scale;
       this._applyTransform();
       return;

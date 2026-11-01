@@ -19,6 +19,7 @@ const state = {
     navIdx: -1, mappedA: null, mappedB: null, nameA: "", nameB: "",
   },
   pytorch: { result: null, view: "overview" },
+  useNetron: true, // browse canvas rendered by the vendored official Netron viewer
   detailCache: { a: {}, b: {} },
   pendingCompare: { a: null, b: null },
   layerPanelClosed: false,
@@ -118,6 +119,22 @@ function hasContent() {
     : state.mode === "pytorch" ? !!(state.pytorch.result && state.pytorch.result.ok)
     : !!state.browse.modelId;
 }
+function applyBrowseRenderer() {
+  const frame = $("netron-frame");
+  const graph = $("browse-graph");
+  if (!frame || !graph) return;
+  if (state.useNetron && state.browse.modelId) {
+    const url = "/netron/?model=" + state.browse.modelId;
+    if (!frame.src.endsWith(url)) frame.src = url;
+    frame.classList.remove("hidden");
+    graph.classList.add("hidden");
+  } else {
+    frame.src = "about:blank";
+    frame.classList.add("hidden");
+    graph.classList.remove("hidden");
+  }
+}
+
 function refreshWelcome() {
   const show = !hasContent() && state.mode !== "pytorch";
   $("welcome").classList.toggle("hidden", !show);
@@ -648,6 +665,8 @@ function refreshLayerPanel() {
   if (hasContent() && !state.layerPanelClosed) {
     const mode = state.mode;
     const rows = [];
+    if (mode === "browse" && state.browse.modelId)
+      rows.push(["layer-netron", "Netron 官方渲染（画布）", state.useNetron]);
     if (mode === "compare") rows.push(["layer-diff", "Diff 图层", getLayer("layer-diff")]);
     rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
     rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);

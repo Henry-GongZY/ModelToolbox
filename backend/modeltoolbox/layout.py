@@ -250,16 +250,62 @@ def layout_single(ir: GraphIR) -> LayoutResult:
             spine_prev = pick
 
         new_index: Dict[str, int] = {}
+        # Give each connected non-spine side chain a stable global column.
+        # The old per-rank slots put a side-chain back on x=0 whenever its
+        # rank contained only that one node, which made deep residual graphs
+        # look like a single column.  Components are computed after removing
+        # the spine, so branches sharing a join still get separate channels.
+        non_spine = {n for n in ranks if n not in spine_ids}
+        side_adj = {n: set() for n in non_spine}
+        for nid in non_spine:
+            for other in preds.get(nid, []) + succs.get(nid, []):
+                if other in non_spine:
+                    side_adj[nid].add(other)
+        components = []
+        remaining = set(non_spine)
+        while remaining:
+            seed = min(remaining, key=lambda n: (ranks.get(n, 0), n))
+            stack, comp = [seed], set()
+            while stack:
+                cur = stack.pop()
+                if cur not in remaining:
+                    continue
+                remaining.remove(cur); comp.add(cur)
+                stack.extend(side_adj[cur] & remaining)
+            components.append(comp)
+        # Reuse a side lane for components that occupy different vertical
+        # ranges. Giving every component a permanent column makes deep models
+        # unnecessarily wide even when their branches live far apart.
+        components.sort(key=lambda c: (
+            min(ranks.get(n, 0) for n in c),
+            min((index_in_rank.get(n, 0), n) for n in c),
+        ))
+        lane_ends: List[int] = []
+        side_col: Dict[str, int] = {}
+        for comp in components:
+            first_rank = min(ranks.get(n, 0) for n in comp)
+            last_rank = max(ranks.get(n, 0) for n in comp)
+            lane = next((i for i, end in enumerate(lane_ends) if end < first_rank), None)
+            if lane is None:
+                lane = len(lane_ends)
+                lane_ends.append(last_rank)
+            else:
+                lane_ends[lane] = last_rank
+            for nid in comp:
+                side_col[nid] = 1 + lane
         for r in sorted_ranks:
             layer = [n for n in layers[r] if kind_of(n) == "node"]
-            spine_here = [n for n in layer if n in spine_ids][:1]
-            rest = [n for n in layer if n not in spine_here]
-            k = (len(layer) - 1) // 2 if spine_here else 0
-            final = rest[:k] + spine_here + rest[k:]
-            for i, nid in enumerate(final):
-                new_index[nid] = i
+            same_col = {}
+            for nid in layer:
+                if nid in spine_ids:
+                    new_index[nid] = 0
+                else:
+                    base = side_col.get(nid, 1)
+                    offset = same_col.get(base, 0)
+                    new_index[nid] = base + offset
+                    same_col[base] = offset + 1
             # pseudo io nodes keep their own placement (they follow anchors)
-        index_in_rank = {**{n: i for n, i in new_index.items()},
+        index_in_rank = {**new_index,
                          **{n: index_in_rank[n] for n in index_in_rank
                             if kind_of(n) != "node"}}
 
@@ -415,8 +461,14 @@ def layout_diff_pair(a: GraphIR, b: GraphIR, matches: List[Any]) -> Tuple[Layout
         max_rank = max(by_rank) if by_rank else 0
         vertical = lr.orientation == "vertical"
         out.orientation = lr.orientation
+        # Keep the same left skip channel as layout_single().  Without this,
+        # a vertically oriented compare view silently moves its boxes back to
+        # x=40 and long residual edges cross the graph instead of using the
+        # Netron-style channel on the left.
+        out.x_origin = lr.x_origin if vertical else 0.0
         STEP_W = NODE_H + Y_GAP if vertical else NODE_W + X_GAP
         STEP_S = NODE_W + X_GAP if vertical else NODE_H + Y_GAP
+        slot_origin = out.x_origin if vertical else 0.0
         for nid, box in lr.boxes.items():
             if box.kind in ("input", "output"):
                 continue  # placed after real nodes, following their neighbour
@@ -429,7 +481,7 @@ def layout_diff_pair(a: GraphIR, b: GraphIR, matches: List[Any]) -> Tuple[Layout
             if vertical:
                 # rank runs downward, slots run rightward
                 out.boxes[nid] = NodeBox(
-                    node_id=nid, x=slot * STEP_S + 40, y=(r + 1) * STEP_W,
+                    node_id=nid, x=slot * STEP_S + slot_origin, y=(r + 1) * STEP_W,
                     w=NODE_W, h=NODE_H, kind=box.kind, label=box.label)
             else:
                 out.boxes[nid] = NodeBox(
