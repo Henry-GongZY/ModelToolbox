@@ -224,6 +224,14 @@ export function netronWireFollow(frameId, side) {
 export function netronApplyDiffTint() {
     const cmp = deps.state.compare;
     if (!cmp.useNetronCompare || !cmp.diff) return;
+    if (!cmp.diffMode) {
+        // diff mode off: restore native colors on both viewers
+        netronApplyDiffView("netron-frame-a", "a",
+            { consistentNodes: new Set(), nodeKinds: {}, edgeKinds: {} });
+        netronApplyDiffView("netron-frame-b", "b",
+            { consistentNodes: new Set(), nodeKinds: {}, edgeKinds: {} });
+        return;
+    }
     const tintOn = deps.getLayer("layer-diff");
     const consistentA = new Set(), consistentB = new Set();
     const nodeKindsA = {}, nodeKindsB = {};

@@ -17,6 +17,7 @@ const state = {
     diffId: null, diff: null, match: null, folding: null,
     aModelId: null, bModelId: null, nodesA: {}, nodesB: {},
     navIdx: -1, mappedA: null, mappedB: null, nameA: "", nameB: "",
+    useNetronCompare: true, diffMode: true,
     consistentOpacity: 0.25,
   },
   pytorch: { result: null, view: "overview", selected: null },
@@ -262,7 +263,7 @@ function applyDiffResult(res, ms, nameA, nameB) {
     aModelId: res.a_model_id, bModelId: res.b_model_id,
     nodesA: res.nodes_a || {}, nodesB: res.nodes_b || {},
     mappedA: null, mappedB: null, nameA, nameB,
-    navIdx: -1, useNetronCompare: true,
+    navIdx: -1, useNetronCompare: true, diffMode: true,
   });
   state.detailCache = { a: {}, b: {} };
   $("cmp-head-a").innerHTML = `A: <span>${esc(nameA)}</span>`;
@@ -357,6 +358,7 @@ async function runCompareWithFiles(fa, fb) {
 
 // ---------- diff UI ----------
 function renderDiffSummary() {
+  if (!state.compare.diffMode) { $("props").classList.add("hidden"); return; }
   const d = state.compare.diff;
   const sum = d.summary;
   const rows = [["相同", sum.unchanged], ["新增(B)", sum.added], ["删除(A)", sum.removed],
@@ -435,9 +437,12 @@ function refreshLayerPanel() {
       rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
     }
     if (mode === "compare") {
-      rows.push(["layer-diff", "Diff 染色", getLayer("layer-diff")]);
-      rows.push(["slider-consistent", "一致部分透明度", state.compare.consistentOpacity]);
-      rows.push(["sync-view", "点击跟随对侧", getLayer("sync-view") !== false]);
+      rows.push(["layer-diff-mode", "Diff 模式", state.compare.diffMode]);
+      if (state.compare.diffMode) {
+        rows.push(["layer-diff", "Diff 染色", getLayer("layer-diff")]);
+        rows.push(["slider-consistent", "一致部分透明度", state.compare.consistentOpacity]);
+        rows.push(["sync-view", "点击跟随对侧", getLayer("sync-view") !== false]);
+      }
     }
     const heatOn = getLayer("layer-heat");
     $("lp-toggles").innerHTML = rows.map(([id, label, checked]) => {
@@ -458,6 +463,14 @@ function refreshLayerPanel() {
       const el = $(id);
       if (!el) continue;
       el.addEventListener("change", () => {
+        if (id === "layer-diff-mode") {
+          state.compare.diffMode = el.checked;
+          refreshLayers();
+          refreshLayerPanel();
+          if (el.checked) { renderDiffSummary(); }
+          else { $("props").classList.add("hidden"); }
+          return;
+        }
         if (id === "layer-heat" || id === "layer-diff") refreshLayers();
       });
       el.addEventListener("input", () => {
