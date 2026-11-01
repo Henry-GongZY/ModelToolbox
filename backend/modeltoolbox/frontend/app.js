@@ -271,6 +271,7 @@ function applyDiffResult(res, ms, nameA, nameB) {
   setMode("compare");
   applyCompareNetronViews();
   renderDiffSummary();
+  $("props").classList.add("hidden"); // summary starts collapsed
   const sum = res.match.summary;
   setStatusText(`匹配 ${sum.matched_count} · 歧义 ${sum.ambiguous_count} · A独有 ${sum.unmatched_a_count} · B独有 ${sum.unmatched_b_count} (${ms}ms)`);
 }
@@ -367,7 +368,6 @@ function renderDiffSummary() {
     ["歧义", sum.ambiguous]].filter((r) => r[1]);
   const interesting = d.node_diffs.filter((nd) => nd.kind !== "unchanged");
   state.navList = interesting;
-  openProps();
   $("props-title").textContent = "差异摘要";
   $("props-body").innerHTML =
     kvTable(rows) + `<p>${d.topology_identical ? "拓扑指纹一致" : "拓扑指纹不一致"}</p>` +
@@ -389,6 +389,11 @@ function gotoDiff(i) {
   if (nd.a_node_id) netronFocusId("netron-frame-a", nd.a_node_id, true);
   if (nd.b_node_id) netronFocusId("netron-frame-b", nd.b_node_id, true);
 }
+$("diff-summary-btn").addEventListener("click", () => {
+  const p = $("props");
+  if (p.classList.contains("hidden")) { renderDiffSummary(); }
+  else { p.classList.add("hidden"); }
+});
 $("diff-prev").addEventListener("click", () => gotoDiff((state.compare.navIdx === -1 ? 0 : state.compare.navIdx) - 1));
 $("diff-next").addEventListener("click", () => gotoDiff(state.compare.navIdx + 1));
 
