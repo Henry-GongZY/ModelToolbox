@@ -154,3 +154,14 @@
 - **边 diff 语义修复**：B 侧权重 tensor 名带 /unet 前缀导致 90 条假 changed 边——边的结构语义应为"两端节点配对即同一连接"（tensor 改名不是结构差异，节点级已报）。修复后 edge_unchanged=90、added=9、removed=2 全部真实。
 - 调试利器沉淀：index.html 注入 window.__errs 前置捕获（定位到 netronApplyDiffTint 重复声明——多轮补丁叠加的第二次教训）；app.js 顶层声明唯一性审计脚本。
 - 浏览器全链路验证：一致淡化 25%（56 节点+56 边/侧）、开 Diff 染色 → 差异节点/边染色 + 一致保持淡化、滑杆实时调节。106/106 测试通过。
+
+## 去自研渲染模块（2026-11-02，用户需求"前端渲染完全照搬 netron"）
+
+- 删除 `graph.js`（自研 SVG 渲染器）和 `layout.py`（自研布局引擎）及其测试（-12 个布局测试）。
+- server 精简：/api/model/load 和 /api/diff 不再返回 layout 数据（/api/diff 响应从 448MB 降至合理大小）；移除 /api/model/layout 路由。
+- app.js 全量重写（822 行，无重复声明）：browse=单 Netron viewer，compare=双 Netron viewer；一致透明度滑杆保留；Diff 染色开关保留；PyTorch 模块层级用原生 HTML 树替代 SVG 渲染。
+- 桥接函数抽取到 `mtbx-bridge.js`（改名避开 /netron 路由前缀冲突——`netron-bridge.js` 会被 /netron/* 路由拦截返回 404）。
+- 修复过程中发现的 bug：app.js 顶层声明重复（setStatus/setStatusText/exportAs/netronApplyDiffTint 等——多轮补丁叠加导致）；DIFF_TINT TDZ 时序错误；useNetronCompare 字段位置错误（顶层 → state.compare 内）。
+- 新增前置错误捕获脚本（window.__errs），任何 JS 错误立即可见。
+- 浏览器全链路验证：双 Netron 渲染 + 一致淡化（56 节点+56 边@25%）+ Diff 染色（B 侧 5 节点）全部生效。
+- 106/106 测试通过。

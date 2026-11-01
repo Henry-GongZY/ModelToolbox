@@ -1,34 +1,46 @@
-// ModelToolbox frontend — canvas-first, no toolbars.
-// Interaction model:
-//   - welcome card on empty canvas (open / compare / pytorch, drag & drop)
-//   - ⌘/Ctrl+K command palette: every action + fuzzy node search & jump
-//   - right-click context menus (canvas / node)
-//   - floating layer panel (bottom-right): layer toggles + legend
-//   - in-place expandable node details (click), properties drawer, status bar
+// ModelToolbox frontend — the vendored official Netron viewer is the only
+// graph renderer (browse = one instance, compare = two side-by-side
+// instances). PyTorch module hierarchies render as a native HTML tree.
+// Canvas-first interaction: welcome card, ⌘K palette, context menus,
+// floating layer panel, status bar.
 import { apiPost, apiGet, apiDownload } from "./api.js";
-import { GraphView } from "./graph.js";
-import { initBridge, netronApplyHeat, netronApplyDiffTint, netronApplyDiffView,
-         netronFocusId, netronFocusByName, netronHideChrome, netronWireFollow,
+import { initBridge, netronApplyHeat, netronApplyDiffTint, netronFocusId,
+         netronFocusByName, netronHideChrome, netronWireFollow,
          netronSetConsistentOpacity } from "./mtbx-bridge.js";
 
 const $ = (id) => document.getElementById(id);
 
 const state = {
   mode: "browse", // browse | compare | pytorch
-  browse: { modelId: null, ir: null, meta: null, layout: null, profileId: null, mapped: null },
+  browse: { modelId: null, ir: null, meta: null, profileId: null, mapped: null },
   compare: {
-    diffId: null, diff: null, match: null, folding: null, layouts: null,
-    aModelId: null, bModelId: null, nodesA: {}, nodesB: {}, folded: new Set(),
+    diffId: null, diff: null, match: null, folding: null,
+    aModelId: null, bModelId: null, nodesA: {}, nodesB: {},
     navIdx: -1, mappedA: null, mappedB: null, nameA: "", nameB: "",
-    useNetronCompare: false, // dual official Netron viewers for compare mode
-    consistentOpacity: 0.25, // faded level for unchanged layers/connections
+    consistentOpacity: 0.25,
   },
-  pytorch: { result: null, view: "overview" },
-  useNetron: true, // browse canvas rendered by the vendored official Netron viewer
-  detailCache: { a: {}, b: {} },
+  pytorch: { result: null, view: "overview", selected: null },
   pendingCompare: { a: null, b: null },
   layerPanelClosed: false,
+  navList: [],
 };
+
+// ---------- init the Netron bridge with app dependencies ----------
+const DIFF_TINT = {
+  added: "#1f6f43", removed: "#8f2f2f", op_changed: "#8f4a2f",
+  attr_changed: "#7d5a2f", shape_changed: "#7d2f5a", dtype_changed: "#5a2f7d",
+  param_changed: "#2f5a7d", connection_changed: "#4a4a2f", ambiguous: "#8a6d1f",
+};
+
+initBridge({
+  $,
+  state,
+  getLayer,
+  DIFF_TINT,
+  toast,
+  setStatusText,
+  findPartner,
+});
 
 // ---------- tiny helpers ----------
 function toast(msg, ms = 2600) {
@@ -38,16 +50,16 @@ function toast(msg, ms = 2600) {
   clearTimeout(t._h);
   t._h = setTimeout(() => t.classList.add("hidden"), ms);
 }
-function setStatus(el, msg, cls = "") {
-  el.textContent = msg || "";
-  el.className = "status " + cls;
-}
 function setStatusText(msg, cls = "") {
   $("sb-left").textContent = msg;
   $("sb-left").style.color = cls === "err" ? "var(--removed)" : cls === "ok" ? "var(--added)" : "";
 }
-function esc(s) {
-  return String(s == null ? "" : s)
+function setStatus(el, msg, cls = "") {
+  el.textContent = msg || "";
+  el.className = "status " + cls;
+}
+function esc(v) {
+  return String(v == null ? "" : v)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 function kvTable(pairs) {
@@ -62,17 +74,12 @@ function fileToBase64(file) {
     r.readAsDataURL(file);
   });
 }
+function openProps() { $("props").classList.remove("hidden"); }
 
 const DIFF_BADGE = {
-  added: { letter: "A", cls: "node-added" },
-  removed: { letter: "D", cls: "node-removed" },
-  op_changed: { letter: "M", cls: "node-modified" },
-  attr_changed: { letter: "M", cls: "node-modified" },
-  shape_changed: { letter: "S", cls: "node-modified" },
-  dtype_changed: { letter: "T", cls: "node-modified" },
-  param_changed: { letter: "P", cls: "node-modified" },
-  connection_changed: { letter: "C", cls: "node-modified" },
-  ambiguous: { letter: "?", cls: "node-ambiguous" },
+  added: "A", removed: "D", op_changed: "M", attr_changed: "M",
+  shape_changed: "S", dtype_changed: "T", param_changed: "P",
+  connection_changed: "C", ambiguous: "?",
 };
 const HEAT_COLORS = ["#31567e", "#2f7fb5", "#2f9e6e", "#c9a227", "#c94f43"];
 function heatColor(v, min, max) {
@@ -80,97 +87,11 @@ function heatColor(v, min, max) {
   const t = Math.min(Math.max((v - min) / (max - min || 1), 0), 1);
   return HEAT_COLORS[Math.min(Math.floor(t * 5), 4)];
 }
-
-// ---------- graph views ----------
-const browseGraph = new GraphView($("browse-graph"), {
-  onSelect: (id) => { showProps("browse", id); },
-  onEmptyClick: () => { browseGraph.collapseAll(); showProps("browse", null); },
-  detailHTML: (id) => browseDetailHTML(id),
-});
-
-
-const DIFF_TINT = {
-  added: "#1f6f43", removed: "#8f2f2f", op_changed: "#8f4a2f",
-  attr_changed: "#7d5a2f", shape_changed: "#7d2f5a", dtype_changed: "#5a2f7d",
-  param_changed: "#2f5a7d", connection_changed: "#4a4a2f", ambiguous: "#8a6d1f",
-};
-
-
-
-
-
-
-
-
-
-
-
-
-function applyCompareNetronViews() {
-  const fa = $("netron-frame-a"), fb = $("netron-frame-b");
-  const on = state.compare.useNetronCompare;
-  const urlA = "/netron/?model=" + state.compare.aModelId;
-  const urlB = "/netron/?model=" + state.compare.bModelId;
-  if (on) {
-    if (!fa.src.endsWith(urlA)) fa.src = urlA;
-    if (!fb.src.endsWith(urlB)) fb.src = urlB;
-    fa.classList.remove("hidden"); fb.classList.remove("hidden");
-    $("cmp-graph-a").classList.add("hidden");
-    $("cmp-graph-b").classList.add("hidden");
-    netronHideChrome("netron-frame-a");
-    netronHideChrome("netron-frame-b");
-    netronWireFollow("netron-frame-a", "a");
-    netronWireFollow("netron-frame-b", "b");
-    netronApplyDiffTint();
-    refreshLayerPanel();
-  } else {
-    fa.src = "about:blank"; fb.src = "about:blank";
-    fa.classList.add("hidden"); fb.classList.add("hidden");
-    $("cmp-graph-a").classList.remove("hidden");
-    $("cmp-graph-b").classList.remove("hidden");
-  }
+function fmtShape(vi) {
+  if (!vi) return "";
+  const shp = vi.shape === null ? "?" : JSON.stringify(vi.shape).replace(/null/g, "?");
+  return `${vi.dtype || "?"} ${shp}`;
 }
-
-const graphA = new GraphView($("cmp-graph-a"), {
-  onSelect: (id) => { showProps("a", id); },
-  onEmptyClick: () => { graphA.collapseAll(); showProps("a", null); },
-  detailHTML: (id) => compareDetailHTML("a", id),
-});
-const graphB = new GraphView($("cmp-graph-b"), {
-  onSelect: (id) => { showProps("b", id); },
-  onEmptyClick: () => { graphB.collapseAll(); showProps("b", null); },
-  detailHTML: (id) => compareDetailHTML("b", id),
-});
-const ptGraph = new GraphView($("pt-graph"), {
-  onSelect: (id) => { showPtDetail(id); },
-  onEmptyClick: () => { ptGraph.collapseAll(); showPtDetail(null); },
-  detailHTML: (id) => ptDetailHTML(id),
-});
-const activeGraph = () =>
-  state.mode === "compare" ? graphB : state.mode === "pytorch" ? ptGraph : browseGraph;
-
-let syncing = false;
-graphA.opts.onTransform = (g) => mirrorTransform(graphA, graphB);
-graphB.opts.onTransform = (g) => mirrorTransform(graphB, graphA);
-function mirrorTransform(src, dst) {
-  if (!$("sync-view") || !$("sync-view").checked || syncing) return;
-  syncing = true;
-  dst.tx = src.tx; dst.ty = src.ty; dst.scale = src.scale;
-  dst.viewport.setAttribute("transform", `translate(${dst.tx} ${dst.ty}) scale(${dst.scale})`);
-  dst._scheduleRender();
-  dst._positionOverlays();
-  syncing = false;
-}
-
-initBridge({
-    $: (id) => document.getElementById(id),
-    state,
-    getLayer,
-    DIFF_TINT,
-    toast,
-    setStatusText,
-    findPartner,
-});
 
 // ---------- mode & welcome ----------
 function hasContent() {
@@ -178,22 +99,6 @@ function hasContent() {
     : state.mode === "pytorch" ? !!(state.pytorch.result && state.pytorch.result.ok)
     : !!state.browse.modelId;
 }
-function applyBrowseRenderer() {
-  const frame = $("netron-frame");
-  const graph = $("browse-graph");
-  if (!frame || !graph) return;
-  if (state.useNetron && state.browse.modelId) {
-    const url = "/netron/?model=" + state.browse.modelId;
-    if (!frame.src.endsWith(url)) frame.src = url;
-    frame.classList.remove("hidden");
-    graph.classList.add("hidden");
-  } else {
-    frame.src = "about:blank";
-    frame.classList.add("hidden");
-    graph.classList.remove("hidden");
-  }
-}
-
 function refreshWelcome() {
   const show = !hasContent() && state.mode !== "pytorch";
   $("welcome").classList.toggle("hidden", !show);
@@ -209,7 +114,6 @@ function setMode(mode) {
   $("compare-header").classList.toggle("hidden", mode !== "compare");
   $("diff-nav").classList.toggle("hidden", mode !== "compare");
   if (mode === "compare") setLayer("layer-diff", true);
-  if (mode === "browse") applyBrowseRenderer();
   $("sb-right").textContent =
     mode === "compare" ? `对比 · A ${state.compare.nameA} ⇄ B ${state.compare.nameB}`
     : mode === "pytorch" ? "PyTorch 层级"
@@ -220,133 +124,27 @@ function setMode(mode) {
   refreshLayers();
 }
 
-// ---------- detail cards ----------
-// ---- Netron viewer bridge (iframe is same-origin; official viewer API) ----
-
-
-
-function fmtShape(vi) {
-  if (!vi) return "";
-  const shp = vi.shape === null ? "?" : JSON.stringify(vi.shape).replace(/null/g, "?");
-  return `${vi.dtype || "?"} ${shp}`;
+// ---------- diff helpers ----------
+function diffByNode(side) {
+  const m = {};
+  if (!state.compare.diff) return m;
+  for (const nd of state.compare.diff.node_diffs) {
+    const id = side === "a" ? nd.a_node_id : nd.b_node_id;
+    if (id) m[id] = nd;
+  }
+  return m;
+}
+function findPartner(side, nodeId) {
+  const match = state.compare.match;
+  if (!match) return null;
+  for (const pair of match.matches) {
+    if (side === "a" && pair.a_node_id === nodeId) return pair.b_node_id;
+    if (side === "b" && pair.b_node_id === nodeId) return pair.a_node_id;
+  }
+  return null;
 }
 
-function browseDetailHTML(nodeId) {
-  const n = state.browse.ir && state.browse.ir.nodes.find((x) => x.id === nodeId);
-  if (!n) return "__loading__";
-  return nodeCardHTML(n, null,
-    state.browse.mapped && state.browse.mapped.per_node[nodeId]);
-}
-
-function nodeCardHTML(n, diff, perf) {
-  const rows = [];
-  for (const t of (n.inputs || []).filter(Boolean)) {
-    const vi = n.input_info && n.input_info[t];
-    rows.push(`<tr><td>← ${esc(t)}</td><td>${esc(fmtShape(vi))}</td></tr>`);
-  }
-  for (const t of (n.outputs || []).filter(Boolean)) {
-    const vi = n.output_info && n.output_info[t];
-    rows.push(`<tr><td>→ ${esc(t)}</td><td>${esc(fmtShape(vi))}</td></tr>`);
-  }
-  let attrRows = "";
-  for (const [k, v] of Object.entries(n.attributes || {})) {
-    attrRows += `<tr><td>${esc(k)}</td><td>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`;
-  }
-  let paramRows = "";
-  for (const p of n.params || []) {
-    paramRows += `<tr><td>${esc(p.name)}</td><td>${esc(p.dtype || "?")} ${esc(JSON.stringify(p.shape))}</td></tr>`;
-  }
-  let chRows = "";
-  for (const c of (diff && diff.changes) || []) {
-    chRows += `<tr><td>${esc(c.field)}</td><td>${esc(JSON.stringify(c.before))} → ${esc(JSON.stringify(c.after))}</td></tr>`;
-  }
-  const diffLine = diff && diff.kind !== "unchanged" && diff.kind !== "ambiguous"
-    ? `<div class="warnline">${esc(diff.explanation)}（置信度 ${diff.confidence}）</div>`
-    : (diff && diff.kind === "ambiguous"
-      ? `<div class="warnline">⚠ 存在多个等价候选，对应关系不确定</div>` : "");
-  const perfLine = perf
-    ? `<div class="perf">⏱ ${perf.duration_us.toFixed(1)} us · ${(perf.share * 100).toFixed(1)}% · ×${perf.calls}</div>` : "";
-  const sg = (n.subgraphs || []).length
-    ? `<div class="warnline">含嵌套子图 ×${n.subgraphs.length}</div>` : "";
-  return `<h5><span>${esc(n.display_name)}</span><span class="op-tag">${esc(n.op_type)}</span></h5>
-    <div class="sec">tensors</div><table>${rows.join("")}</table>
-    ${attrRows ? `<div class="sec">attributes</div><table>${attrRows}</table>` : ""}
-    ${paramRows ? `<div class="sec">weights</div><table>${paramRows}</table>` : ""}
-    ${chRows ? `<div class="sec">字段级变化</div><table>${chRows}</table>` : ""}
-    ${diffLine}${sg}${perfLine}`;
-}
-
-function compareDetailHTML(side, nodeId) {
-  const cache = state.detailCache[side][nodeId];
-  if (!cache) {
-    fetchCompareDetail(side, nodeId);
-    return "__loading__";
-  }
-  return nodeCardHTML(cache, diffByNode(side)[nodeId], null);
-}
-
-async function fetchCompareDetail(side, nodeId) {
-  const modelId = side === "a" ? state.compare.aModelId : state.compare.bModelId;
-  if (!modelId || state.detailCache[side][nodeId]) return;
-  try {
-    const res = await apiPost("/api/model/nodes", { model_id: modelId, ids: [nodeId] });
-    if (res.nodes && res.nodes.length) state.detailCache[side][nodeId] = res.nodes[0];
-    else state.detailCache[side][nodeId] = { id: nodeId, display_name: nodeId, inputs: [], outputs: [] };
-  } catch (e) {
-    state.detailCache[side][nodeId] = { id: nodeId, display_name: nodeId, inputs: [], outputs: [] };
-  }
-  const graph = side === "a" ? graphA : graphB;
-  if (graph.expanded.has(nodeId)) graph._syncOverlays();
-}
-
-// ---------- properties drawer ----------
-function openProps() { $("props").classList.remove("hidden"); }
-function showProps(side, nodeId) {
-  const drawer = $("props");
-  if (!nodeId) { drawer.classList.add("hidden"); return; }
-  drawer.classList.remove("hidden");
-  $("props-title").textContent = `属性 — ${side.toUpperCase()}`;
-  const body = $("props-body");
-  if (side === "browse") {
-    const n = state.browse.ir && state.browse.ir.nodes.find((x) => x.id === nodeId);
-    body.innerHTML = n ? propsForNode(n, state.browse.mapped && state.browse.mapped.per_node[nodeId]) : "";
-  } else {
-    const cache = state.detailCache[side][nodeId];
-    if (!cache) {
-      body.innerHTML = "<p>加载中…</p>";
-      fetchCompareDetail(side, nodeId).then(() => showProps(side, nodeId));
-      return;
-    }
-    body.innerHTML = propsForNode(cache, null, diffByNode(side)[nodeId]);
-  }
-}
-function propsForNode(n, perf, diff) {
-  const perfHtml = perf
-    ? kvTable([["耗时 (us)", perf.duration_us.toFixed(1)], ["占比", (perf.share * 100).toFixed(2) + "%"], ["调用", perf.calls]])
-    : "";
-  const diffHtml = diff ? kvTable([
-    ["差异类型", diff.kind], ["置信度", diff.confidence], ["说明", diff.explanation],
-  ]) + ((diff.changes || []).length
-    ? "<h4>字段级变化</h4>" + kvTable(diff.changes.map((c) => [c.field, `${JSON.stringify(c.before)} → ${JSON.stringify(c.after)}`]))
-    : "") : "";
-  return `<h4>${esc(n.display_name)}</h4>
-    ${kvTable([["id", n.id], ["op", n.op_type], ["domain", n.domain || "ai.onnx"]])}
-    ${diffHtml}
-    <h4>输入</h4>${kvTable((n.inputs || []).filter(Boolean).map((t) => {
-      const vi = n.input_info && n.input_info[t];
-      return [t, vi ? fmtShape(vi) : "无 shape 信息"];
-    }))}
-    <h4>输出</h4>${kvTable((n.outputs || []).filter(Boolean).map((t) => {
-      const vi = n.output_info && n.output_info[t];
-      return [t, vi ? fmtShape(vi) : "无 shape 信息"];
-    }))}
-    ${Object.keys(n.attributes || {}).length ? "<h4>属性</h4>" + kvTable(Object.entries(n.attributes)) : ""}
-    ${(n.params || []).length ? "<h4>权重</h4>" + kvTable(n.params.map((p) => [p.name, `${p.dtype || "?"} ${JSON.stringify(p.shape)}`])) : ""}
-    ${perfHtml ? "<h4>性能</h4>" + perfHtml : ""}`;
-}
-$("props-close").addEventListener("click", () => $("props").classList.add("hidden"));
-
-// ---------- model loading (file picker / drag&drop / palette) ----------
+// ---------- model loading (browse = official Netron viewer) ----------
 async function openModelFile(file) {
   if (!file) return;
   setStatusText(`加载 ${file.name}…`);
@@ -354,14 +152,10 @@ async function openModelFile(file) {
     const b64 = await fileToBase64(file);
     const t0 = performance.now();
     const res = await apiPost("/api/model/upload", { name: file.name, data_base64: b64 });
-    const dt = Math.round(performance.now() - t0);
-    state.browse = { modelId: res.model_id, ir: res.ir, meta: res.meta, layout: res.layout, profileId: null, mapped: null };
-    const extra = {};
-    for (const n of res.ir.nodes) extra[n.id] = { op: n.op_type, outTensors: n.outputs.filter(Boolean) };
-    browseGraph.setData(res.layout, extra);
+    const ms = Math.round(performance.now() - t0);
+    state.browse = { modelId: res.model_id, ir: res.ir, meta: res.meta, profileId: null, mapped: null };
     setMode("browse");
-    applyBrowseRenderer();
-    setStatusText(`${res.meta.name} — ${res.meta.node_count} 节点 / ${res.meta.edge_count} 边 (${dt}ms)`);
+    setStatusText(`${res.meta.name} — ${res.meta.node_count} 节点 / ${res.meta.edge_count} 边 (${ms}ms)`);
     if ((res.meta.warnings || []).length) {
       toast(`⚠ ${res.meta.warnings.length} 条解析警告（详见模型属性）`, 3400);
       showModelProps();
@@ -418,10 +212,6 @@ async function openProfileFile(file, target) {
 }
 
 // ---------- compare ----------
-$("w-open").addEventListener("click", () => $("file-open").click());
-$("w-compare").addEventListener("click", () => openCompareDialog());
-$("w-pytorch").addEventListener("click", () => setMode("pytorch"));
-
 function openCompareDialog() {
   $("dlg-compare").classList.remove("hidden");
   state.pendingCompare = { a: null, b: null };
@@ -441,6 +231,7 @@ $("file-open-b").addEventListener("change", (e) => {
 });
 $("cmp-cancel").addEventListener("click", () => $("dlg-compare").classList.add("hidden"));
 $("cmp-run").addEventListener("click", runCompare);
+$("w-compare").addEventListener("click", openCompareDialog);
 
 async function runCompare() {
   const fa = state.pendingCompare.a;
@@ -449,45 +240,56 @@ async function runCompare() {
   setStatus($("cmp-status"), "解析与匹配中…");
   try {
     const t0 = performance.now();
-    const [aB64, bB64] = [await fileToBase64(fa), await fileToBase64(fb)];
+    const b64a = await fileToBase64(fa);
+    const b64b = await fileToBase64(fb);
     const res = await apiPost("/api/diff", {
-      name_a: fa.name, data_a: aB64, name_b: fb.name, data_b: bB64,
+      name_a: fa.name, data_a: b64a, name_b: fb.name, data_b: b64b,
       min_group_size: parseInt($("cmp-min-size").value || "3", 10),
       min_confidence: parseFloat($("cmp-min-conf").value || "0.9"),
     });
-    const dt = Math.round(performance.now() - t0);
+    const ms = Math.round(performance.now() - t0);
     $("dlg-compare").classList.add("hidden");
-    applyDiffResult(res, dt, fa.name, fb.name);
+    applyDiffResult(res, ms, fa.name, fb.name);
   } catch (e) {
     setStatus($("cmp-status"), `对比失败: ${e.message}`, "err");
   }
 }
 
-function applyDiffResult(res, dt, nameA, nameB) {
+function applyDiffResult(res, ms, nameA, nameB) {
   Object.assign(state.compare, {
     diffId: res.diff_id, diff: res.diff, match: res.match,
-    folding: res.folding, layouts: res.layouts, folded: new Set(), navIdx: -1,
+    folding: res.folding,
     aModelId: res.a_model_id, bModelId: res.b_model_id,
     nodesA: res.nodes_a || {}, nodesB: res.nodes_b || {},
     mappedA: null, mappedB: null, nameA, nameB,
+    navIdx: -1, useNetronCompare: true,
   });
   state.detailCache = { a: {}, b: {} };
   $("cmp-head-a").innerHTML = `A: <span>${esc(nameA)}</span>`;
   $("cmp-head-b").innerHTML = `B: <span>${esc(nameB)}</span>`;
   setMode("compare");
-  const exA = {}, exB = {};
-  for (const [id, n] of Object.entries(state.compare.nodesA)) exA[id] = { op: n.display || n.op, outTensors: n.outputs };
-  for (const [id, n] of Object.entries(state.compare.nodesB)) exB[id] = { op: n.display || n.op, outTensors: n.outputs };
   applyCompareNetronViews();
-  if (!state.compare.useNetronCompare) {
-    graphA.setData(res.layouts.a, exA);
-    graphB.setData(res.layouts.b, exB);
-  }
   renderDiffSummary();
-  renderFoldGroups();
-  refreshLayers();
-  const s = res.match.summary;
-  setStatusText(`匹配 ${s.matched_count} · 歧义 ${s.ambiguous_count} · A独有 ${s.unmatched_a_count} · B独有 ${s.unmatched_b_count} (${dt}ms)`);
+  const sum = res.match.summary;
+  setStatusText(`匹配 ${sum.matched_count} · 歧义 ${sum.ambiguous_count} · A独有 ${sum.unmatched_a_count} · B独有 ${sum.unmatched_b_count} (${ms}ms)`);
+}
+
+// ---------- compare Netron views ----------
+function applyCompareNetronViews() {
+  const cmp = state.compare;
+  if (!cmp.aModelId || !cmp.bModelId) return;
+  const fa = $("netron-frame-a"), fb = $("netron-frame-b");
+  const urlA = "/netron/?model=" + cmp.aModelId;
+  const urlB = "/netron/?model=" + cmp.bModelId;
+  if (!fa.src.endsWith(urlA)) fa.src = urlA;
+  if (!fb.src.endsWith(urlB)) fb.src = urlB;
+  fa.classList.remove("hidden"); fb.classList.remove("hidden");
+  netronHideChrome("netron-frame-a");
+  netronHideChrome("netron-frame-b");
+  netronWireFollow("netron-frame-a", "a");
+  netronWireFollow("netron-frame-b", "b");
+  netronApplyDiffTint();
+  netronSetConsistentOpacity(cmp.consistentOpacity);
 }
 
 // ---------- drag & drop ----------
@@ -538,47 +340,38 @@ async function runCompareWithFiles(fa, fb) {
   setStatus($("cmp-status"), "解析与匹配中…");
   try {
     const t0 = performance.now();
-    const [aB64, bB64] = [await fileToBase64(fa), await fileToBase64(fb)];
+    const b64a = await fileToBase64(fa);
+    const b64b = await fileToBase64(fb);
     const res = await apiPost("/api/diff", {
-      name_a: fa.name, data_a: aB64, name_b: fb.name, data_b: bB64,
+      name_a: fa.name, data_a: b64a, name_b: fb.name, data_b: b64b,
       min_group_size: parseInt($("cmp-min-size").value || "3", 10),
       min_confidence: parseFloat($("cmp-min-conf").value || "0.9"),
     });
-    const dt = Math.round(performance.now() - t0);
+    const ms = Math.round(performance.now() - t0);
     $("dlg-compare").classList.add("hidden");
-    applyDiffResult(res, dt, fa.name, fb.name);
+    applyDiffResult(res, ms, fa.name, fb.name);
   } catch (e) {
     setStatus($("cmp-status"), `对比失败: ${e.message}`, "err");
   }
 }
 
 // ---------- diff UI ----------
-function diffByNode(side) {
-  const m = {};
-  if (!state.compare.diff) return m;
-  for (const nd of state.compare.diff.node_diffs) {
-    const id = side === "a" ? nd.a_node_id : nd.b_node_id;
-    if (id) m[id] = nd;
-  }
-  return m;
-}
-
 function renderDiffSummary() {
   const d = state.compare.diff;
-  const s = d.summary;
-  const rows = [["相同", s.unchanged], ["新增(B)", s.added], ["删除(A)", s.removed],
-    ["算子", s.op_changed], ["属性", s.attr_changed], ["shape", s.shape_changed],
-    ["dtype", s.dtype_changed], ["参数", s.param_changed], ["连接", s.connection_changed],
-    ["歧义", s.ambiguous]].filter((r) => r[1]);
+  const sum = d.summary;
+  const rows = [["相同", sum.unchanged], ["新增(B)", sum.added], ["删除(A)", sum.removed],
+    ["算子", sum.op_changed], ["属性", sum.attr_changed], ["shape", sum.shape_changed],
+    ["dtype", sum.dtype_changed], ["参数", sum.param_changed], ["连接", sum.connection_changed],
+    ["歧义", sum.ambiguous]].filter((r) => r[1]);
   const interesting = d.node_diffs.filter((nd) => nd.kind !== "unchanged");
-  state.compare.navList = interesting;
+  state.navList = interesting;
   openProps();
   $("props-title").textContent = "差异摘要";
   $("props-body").innerHTML =
     kvTable(rows) + `<p>${d.topology_identical ? "拓扑指纹一致" : "拓扑指纹不一致"}</p>` +
     (interesting.length
       ? "<h4>差异列表</h4><table>" + interesting.map((nd, i) =>
-        `<tr style="cursor:pointer" data-i="${i}"><td>${DIFF_BADGE[nd.kind] ? DIFF_BADGE[nd.kind].letter : "M"} ${esc(nd.kind)}</td><td>${esc(nd.a_display || nd.b_display)}</td></tr>`).join("") + "</table>"
+        `<tr style="cursor:pointer" data-i="${i}"><td>${DIFF_BADGE[nd.kind] || "M"} ${esc(nd.kind)}</td><td>${esc(nd.a_display || nd.b_display)}</td></tr>`).join("") + "</table>"
       : "<p>无结构差异 🎉</p>");
   $("props-body").querySelectorAll("tr[data-i]").forEach((el) =>
     el.addEventListener("click", () => gotoDiff(parseInt(el.dataset.i, 10))));
@@ -586,99 +379,16 @@ function renderDiffSummary() {
 }
 
 function gotoDiff(i) {
-  const list = state.compare.navList || [];
+  const list = state.navList || [];
   if (!list.length) return;
   state.compare.navIdx = ((i % list.length) + list.length) % list.length;
   const nd = list[state.compare.navIdx];
   $("diff-nav-pos").textContent = `${state.compare.navIdx + 1}/${list.length}`;
-  if (state.compare.useNetronCompare) {
-    if (nd.a_node_id) netronFocusId("netron-frame-a", nd.a_node_id, true);
-    if (nd.b_node_id) netronFocusId("netron-frame-b", nd.b_node_id, true);
-    return;
-  }
-  if (nd.a_node_id) { graphA.focusNode(nd.a_node_id); graphA.selectExternal(nd.a_node_id); }
-  if (nd.b_node_id) { graphB.focusNode(nd.b_node_id); graphB.selectExternal(nd.b_node_id); }
+  if (nd.a_node_id) netronFocusId("netron-frame-a", nd.a_node_id, true);
+  if (nd.b_node_id) netronFocusId("netron-frame-b", nd.b_node_id, true);
 }
 $("diff-prev").addEventListener("click", () => gotoDiff((state.compare.navIdx === -1 ? 0 : state.compare.navIdx) - 1));
 $("diff-next").addEventListener("click", () => gotoDiff(state.compare.navIdx + 1));
-
-function renderFoldGroups() {
-  const groups = state.compare.folding.groups;
-  if (state.compare.useNetronCompare) {
-    // Netron has no fold concept — group membership is conveyed by tint in
-    // a later pass; hide the fold checkboxes here.
-    return;
-  }
-  if (!groups.length) return;
-  openProps();
-  const body = $("props-body");
-  const wrap = document.createElement("div");
-  wrap.innerHTML = "<h4>公共子图折叠</h4>" + groups.map((g) => `
-    <label style="display:flex;gap:6px;align-items:flex-start;font-size:11.5px;margin:4px 0">
-      <input type="checkbox" data-gid="${esc(g.group_id)}">
-      <span><b>${esc(g.label)}</b><br><span style="color:var(--muted)">${esc(g.summary)}</span></span>
-    </label>`).join("");
-  body.appendChild(wrap);
-  wrap.querySelectorAll("input[type=checkbox]").forEach((cb) =>
-    cb.addEventListener("change", async () => {
-      const gid = cb.dataset.gid;
-      if (cb.checked) state.compare.folded.add(gid);
-      else state.compare.folded.delete(gid);
-      await applyCompareViews();
-    }));
-}
-
-function buildViewForSide(side) {
-  const layout = state.compare.layouts[side];
-  const folded = state.compare.folded;
-  if (!folded.size) {
-    return Promise.resolve({ boxes: layout.boxes, edge_points: layout.edge_points,
-      width: layout.width, height: layout.height });
-  }
-  return apiPost("/api/fold", { diff_id: state.compare.diffId, folded_group_ids: [...folded] })
-    .then((res) => {
-      const view = res.views[side];
-      const boxes = {};
-      const groupBox = {};
-      for (const nid in layout.boxes) {
-        const b = layout.boxes[nid];
-        if (b.kind === "input" || b.kind === "output") boxes[nid] = b;
-      }
-      for (const n of view.display_nodes) {
-        if (n.kind === "node") { if (layout.boxes[n.id]) boxes[n.id] = layout.boxes[n.id]; }
-        else {
-          const members = n.orig_node_ids.filter((m) => layout.boxes[m]);
-          if (!members.length) continue;
-          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-          for (const m of members) {
-            const b = layout.boxes[m];
-            x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
-            x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h);
-          }
-          groupBox[n.id] = { node_id: n.id, x: x0 - 12, y: y0 - 12,
-            w: x1 - x0 + 24, h: y1 - y0 + 24, kind: "group", label: n.label };
-        }
-      }
-      Object.assign(boxes, groupBox);
-      const edges = {};
-      for (const e of view.display_edges) {
-        const sb = boxes[e.src], db = boxes[e.dst];
-        if (!sb || !db) continue;
-        edges[e.id] = { src: [sb.x + sb.w, sb.y + sb.h / 2], dst: [db.x, db.y + db.h / 2], tensor: e.tensor };
-      }
-      return { boxes, edge_points: edges, width: layout.width, height: layout.height };
-    });
-}
-
-async function applyCompareViews() {
-  const [la, lb] = await Promise.all([buildViewForSide("a"), buildViewForSide("b")]);
-  const exA = {}, exB = {};
-  for (const [id, n] of Object.entries(state.compare.nodesA)) exA[id] = { op: n.display || n.op, outTensors: n.outputs };
-  for (const [id, n] of Object.entries(state.compare.nodesB)) exB[id] = { op: n.display || n.op, outTensors: n.outputs };
-  graphA.setData(la, exA);
-  graphB.setData(lb, exB);
-  refreshLayers();
-}
 
 // ---------- layers & heat ----------
 function getLayer(id) {
@@ -689,7 +399,6 @@ function setLayer(id, checked) {
   const el = $(id);
   if (el) el.checked = checked;
 }
-$("heat-mode") && $("heat-mode").addEventListener("change", refreshLayers);
 
 function heatStyles(mapped, mode) {
   if (!mapped) return {};
@@ -706,43 +415,13 @@ function heatStyles(mapped, mode) {
 }
 
 function refreshLayers() {
-  const mode = getLayer("heat-mode") || "duration";
+  const heatMode = getLayer("heat-mode") || "duration";
   if (state.mode === "browse") {
-    if (!state.browse.ir) { browseGraph.setStyles({}); netronApplyHeat({}); return; }
-    const heat = getLayer("layer-heat") ? heatStyles(state.browse.mapped, mode) : {};
-    if (state.useNetron) {
-      // official Netron viewer: color nodes through the bridge
-      const fillMap = {};
-      for (const [nid, color] of Object.entries(heat)) fillMap[nid] = color;
-      netronApplyHeat(fillMap);
-      if (!Object.keys(heat).length) { $("heat-min").textContent = "min"; $("heat-max").textContent = "max"; }
-      return;
-    }
-    const styles = {};
-    for (const [nid, fill] of Object.entries(heat)) styles[nid] = { fill };
-    browseGraph.setStyles(styles);
+    if (!state.browse.ir || !state.browse.modelId) { netronApplyHeat({}); return; }
+    const heat = getLayer("layer-heat") ? heatStyles(state.browse.mapped, heatMode) : {};
+    netronApplyHeat(heat);
   } else if (state.mode === "compare") {
-    if (state.compare.useNetronCompare) { netronApplyDiffTint(); return; }
-    if (!state.compare.diff) return;
-    const useDiff = getLayer("layer-diff");
-    const only = getLayer("diff-only");
-    const useHeat = getLayer("layer-heat");
-    const heatA = useHeat ? heatStyles(state.compare.mappedA, mode) : {};
-    const heatB = useHeat ? heatStyles(state.compare.mappedB, mode) : {};
-    const stylesA = {}, stylesB = {};
-    for (const nd of state.compare.diff.node_diffs) {
-      const badge = DIFF_BADGE[nd.kind];
-      const style = useDiff && badge ? { cls: badge.cls, badge: badge.letter } : {};
-      if (useDiff && only && nd.kind === "unchanged") style.dim = true;
-      if (nd.a_node_id) stylesA[nd.a_node_id] = style;
-      if (nd.b_node_id) stylesB[nd.b_node_id] = { ...style };
-    }
-    for (const [nid, fill] of Object.entries(heatA)) stylesA[nid] = { ...(stylesA[nid] || {}), fill };
-    for (const [nid, fill] of Object.entries(heatB)) stylesB[nid] = { ...(stylesB[nid] || {}), fill };
-    graphA.setStyles(stylesA);
-    graphB.setStyles(stylesB);
-  } else {
-    ptGraph.setStyles({});
+    netronApplyDiffTint();
   }
 }
 
@@ -752,23 +431,13 @@ function refreshLayerPanel() {
   if (hasContent() && !state.layerPanelClosed) {
     const mode = state.mode;
     const rows = [];
-    if (mode === "browse" && state.browse.modelId)
-      rows.push(["layer-netron", "Netron 官方渲染（画布）", state.useNetron]);
-    if (mode === "compare") {
-      rows.push(["layer-netron-cmp", "Netron 官方渲染（双侧）", state.compare.useNetronCompare]);
-      rows.push(["layer-diff", "Diff 染色", getLayer("layer-diff")]);
-      if (state.compare.useNetronCompare) {
-        rows.push(["sync-view", "点击跟随对侧", getLayer("sync-view") !== false]);
-        rows.push(["slider-consistent", "一致部分透明度", state.compare.consistentOpacity]);
-      } else {
-        rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
-        rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
-        rows.push(["sync-view", "同步平移缩放", getLayer("sync-view") !== false]);
-        rows.push(["diff-only", "仅看差异", getLayer("diff-only")]);
-      }
-    } else {
+    if (mode === "browse" && state.browse.modelId) {
       rows.push(["layer-heat", "性能热力图", getLayer("layer-heat")]);
-      rows.push(["show-tensornames", "边显示 Tensor 名", getLayer("show-tensornames") !== false]);
+    }
+    if (mode === "compare") {
+      rows.push(["layer-diff", "Diff 染色", getLayer("layer-diff")]);
+      rows.push(["slider-consistent", "一致部分透明度", state.compare.consistentOpacity]);
+      rows.push(["sync-view", "点击跟随对侧", getLayer("sync-view") !== false]);
     }
     const heatOn = getLayer("layer-heat");
     $("lp-toggles").innerHTML = rows.map(([id, label, checked]) => {
@@ -782,40 +451,22 @@ function refreshLayerPanel() {
     }).join("") +
       (heatOn ? `<label class="lp-toggle" style="color:var(--muted)">着色依据
         <select id="heat-mode" class="menu-select" style="margin-left:auto">
-          <option value="duration" ${mode === "duration" ? "selected" : ""}>耗时</option>
-          <option value="share" ${mode === "share" ? "selected" : ""}>占比</option>
+          <option value="duration" selected>耗时</option>
+          <option value="share">占比</option>
         </select></label>` : "");
-    for (const [id, , ] of rows) {
+    for (const [id] of rows) {
       const el = $(id);
-      if (el) el.addEventListener("change", () => {
-        if (id === "layer-netron") {
-          state.useNetron = el.checked;
-          applyBrowseRenderer();
-          return;
-        }
-        if (id === "layer-netron-cmp") {
-          state.compare.useNetronCompare = el.checked;
-          applyCompareNetronViews();
-          return;
-        }
+      if (!el) continue;
+      el.addEventListener("change", () => {
+        if (id === "layer-heat" || id === "layer-diff") refreshLayers();
+      });
+      el.addEventListener("input", () => {
         if (id === "slider-consistent") {
-          const applyV = () => {
-            const v = parseInt(el.value, 10) / 100;
-            const val = document.getElementById("slider-consistent-val");
-            if (val) val.textContent = el.value + "%";
-            netronSetConsistentOpacity(v);
-          };
-          applyV();
-          el.addEventListener("input", applyV);
-          return;
+          const v = parseInt(el.value, 10) / 100;
+          const val = $("slider-consistent-val");
+          if (val) val.textContent = el.value + "%";
+          netronSetConsistentOpacity(v);
         }
-        if (id === "show-tensornames") {
-          [browseGraph, graphA, graphB, ptGraph].forEach((g) => {
-            g.opts.showTensorNames = el.checked;
-            g._scheduleRender(true);
-          });
-        }
-        refreshLayers();
       });
     }
     const hm = $("heat-mode");
@@ -847,6 +498,8 @@ $("file-profile-b").addEventListener("change", (e) => {
   const f = e.target.files[0]; e.target.value = "";
   if (f) openProfileFile(f, "b");
 });
+$("w-open").addEventListener("click", () => $("file-open").click());
+$("w-pytorch").addEventListener("click", () => setMode("pytorch"));
 
 // ---------- context menu ----------
 function closeCtxMenu() { $("ctx-menu").classList.add("hidden"); }
@@ -854,9 +507,6 @@ function openCtxMenu(x, y, items) {
   const menu = $("ctx-menu");
   menu.innerHTML = items.map((it) => {
     if (it === "-") return `<div class="ctx-sep"></div>`;
-    if (it.checkbox) {
-      return `<label class="ctx-item"><input type="checkbox" data-action="${esc(it.action)}" ${it.checked ? "checked" : ""}> ${esc(it.label)}</label>`;
-    }
     return `<div class="ctx-item ${it.disabled ? "disabled" : ""}" data-action="${esc(it.action)}">
       <span class="pi-icon">${esc(it.icon || "")}</span>${esc(it.label)}
       ${it.hint ? `<span class="ci-hint">${esc(it.hint)}</span>` : ""}</div>`;
@@ -867,19 +517,13 @@ function openCtxMenu(x, y, items) {
   menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
   menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
   menu.querySelectorAll("[data-action]").forEach((el) => {
-    el.addEventListener("click", (ev) => {
+    el.addEventListener("click", () => {
       const act = el.dataset.action;
       closeCtxMenu();
       runAction(act);
     });
-    el.addEventListener("change", (ev) => {
-      if (el.dataset && el.dataset.action && el.type === "checkbox") {
-        runAction("toggle:" + el.dataset.action.replace("toggle:", ""), el.checked);
-      }
-    });
   });
 }
-
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#ctx-menu")) closeCtxMenu();
 });
@@ -889,15 +533,7 @@ document.addEventListener("contextmenu", (e) => {
       e.target.closest("#palette")) return;
   e.preventDefault();
   if (state.mode === "pytorch") { openCtxMenu(e.clientX, e.clientY, pytorchMenuItems()); return; }
-  const nodeEl = e.target.closest(".node-box");
-  if (nodeEl && state.mode === "browse") {
-    openCtxMenu(e.clientX, e.clientY, browseNodeMenuItems(nodeEl.getAttribute("data-id")));
-  } else if (nodeEl && state.mode === "compare") {
-    const side = e.target.closest("#cmp-graph-a") ? "a" : "b";
-    openCtxMenu(e.clientX, e.clientY, compareNodeMenuItems(side, nodeEl.getAttribute("data-id")));
-  } else {
-    openCtxMenu(e.clientX, e.clientY, canvasMenuItems());
-  }
+  openCtxMenu(e.clientX, e.clientY, canvasMenuItems());
 });
 
 function canvasMenuItems() {
@@ -906,7 +542,6 @@ function canvasMenuItems() {
     { action: "compare", icon: "⇆", label: "对比两个模型…", hint: "D" },
     { action: "pytorch", icon: "🐍", label: "PyTorch 项目…" },
     "-",
-    { action: "fit", icon: "⤢", label: "适合视图", hint: "F" },
     { action: "props-model", icon: "ⓘ", label: "模型属性", disabled: !state.browse.meta },
     { action: "load-profile", icon: "⏱", label: "加载 Profile…", disabled: !state.browse.modelId },
     "-",
@@ -915,10 +550,9 @@ function canvasMenuItems() {
   ];
   if (state.mode === "compare" && state.compare.diffId) {
     items.push("-");
-    items.push({ action: "export:json", icon: "↧", label: "导出 Diff JSON" });
-    items.push({ action: "export:csv", icon: "↧", label: "导出 Diff CSV" });
-    items.push({ action: "export:md", icon: "↧", label: "导出 Diff Markdown" });
-    items.push({ action: "export:html", icon: "↧", label: "导出 Diff HTML" });
+    for (const f of ["json", "csv", "md", "html"]) {
+      items.push({ action: `export:${f}`, icon: "↧", label: `导出 Diff ${f.toUpperCase()}` });
+    }
   }
   if (state.mode === "browse" && state.browse.profileId) {
     items.push({ action: "export:pjson", icon: "↧", label: "导出 Profile JSON" });
@@ -927,68 +561,18 @@ function canvasMenuItems() {
   return items;
 }
 
-function browseNodeMenuItems(nodeId) {
-  const n = state.browse.ir && state.browse.ir.nodes.find((x) => x.id === nodeId);
-  return [
-    { action: "toggle-node", icon: "▦", label: "展开 / 收起详情" },
-    { action: "copy-node", icon: "⧉", label: "复制节点信息",
-      disabled: !n },
-    "-",
-    { action: "fit", icon: "⤢", label: "适合视图", hint: "F" },
-    { action: "palette", icon: "⌘", label: "搜索节点 / 命令", hint: "⌘K" },
-  ];
-}
-
-function compareNodeMenuItems(side, nodeId) {
-  const other = side === "a" ? "b" : "a";
-  const partnerId = findPartner(side, nodeId);
-  return [
-    { action: "toggle-node", icon: "▦", label: "展开 / 收起详情" },
-    { action: `locate:${other}:${partnerId || ""}`, icon: "⇥", label: `在 ${other.toUpperCase()} 侧定位`,
-      disabled: !partnerId },
-    { action: "copy-node", icon: "⧉", label: "复制节点信息" },
-    "-",
-    { action: "fit", icon: "⤢", label: "适合视图", hint: "F" },
-  ];
-}
-
 function pytorchMenuItems() {
   return [
     { action: "pt-toggle", icon: "▦", label: "概览 / 详细切换" },
     { action: "pt-back", icon: "←", label: "返回模型画布" },
-    "-",
-    { action: "fit", icon: "⤢", label: "适合视图", hint: "F" },
   ];
 }
 
-function findPartner(side, nodeId) {
-  const m = state.compare.match;
-  if (!m) return null;
-  for (const match of m.matches) {
-    if (side === "a" && match.a_node_id === nodeId) return match.b_node_id;
-    if (side === "b" && match.b_node_id === nodeId) return match.a_node_id;
-  }
-  return null;
-}
-
-function copyText(text) {
-  navigator.clipboard && navigator.clipboard.writeText(text).then(
-    () => toast("已复制到剪贴板"),
-    () => toast("复制失败"));
-}
-
-function runAction(action, checked) {
-  if (action.startsWith("toggle:")) {
-    const key = action.slice(7);
-    if (key === "layer-diff" || key === "layer-heat" || key === "diff-only") refreshLayers();
-    return;
-  }
+function runAction(action) {
   switch (action) {
     case "open": $("file-open").click(); break;
     case "compare": openCompareDialog(); break;
     case "pytorch": setMode("pytorch"); break;
-    case "fit": [browseGraph, graphA, graphB, ptGraph].forEach((g) =>
-      document.body.contains(g.container) && !g.container.closest(".hidden") && g.fitView()); break;
     case "props-model": showModelProps(); break;
     case "load-profile": $("file-profile").click(); break;
     case "panel-layers":
@@ -996,35 +580,15 @@ function runAction(action, checked) {
       refreshLayerPanel();
       break;
     case "palette": openPalette(); break;
-    case "toggle-node": {
-      const g = activeGraph();
-      if (g.selected) g.toggleExpand(g.selected);
-      break;
-    }
-    case "copy-node": {
-      const g = activeGraph();
-      if (g.selected) {
-        const n = state.browse.ir && state.browse.ir.nodes.find((x) => x.id === g.selected);
-        copyText(n ? JSON.stringify(n, null, 2) : g.selected);
-      }
-      break;
-    }
     case "pt-toggle": {
       if (!state.pytorch.result) { toast("请先加载 PyTorch 项目"); break; }
       state.pytorch.view = state.pytorch.view === "overview" ? "detail" : "overview";
-      renderPtGraph();
+      renderPtMain();
       break;
     }
-    case "pt-back": setMode(state.browse.modelId ? "browse" : "browse"); break;
+    case "pt-back": setMode("browse"); break;
     default:
       if (action.startsWith("export:")) exportAs(action.slice(7));
-      else if (action.startsWith("locate:")) {
-        const [, side, id] = action.split(":");
-        if (id) {
-          const g = side === "a" ? graphA : graphB;
-          g.focusNode(id); g.selectExternal(id);
-        } else toast("该节点在另一侧没有可信对应（或为歧义）");
-      }
   }
 }
 
@@ -1051,7 +615,6 @@ function paletteActions() {
     { icon: "📄", label: "打开模型…", hint: "O", run: () => $("file-open").click() },
     { icon: "⇆", label: "对比两个模型…", hint: "D", run: openCompareDialog },
     { icon: "🐍", label: "PyTorch 项目…", run: () => setMode("pytorch") },
-    { icon: "⤢", label: "适合视图", hint: "F", run: () => runAction("fit") },
     { icon: "⌘", label: "命令面板帮助（↑↓ 选择，↵ 执行）", run: () => {} },
   ];
   if (state.browse.meta) acts.push({ icon: "ⓘ", label: "模型属性", run: showModelProps });
@@ -1075,46 +638,36 @@ function paletteNodeMatches(q) {
       const hay = `${n.id} ${n.display_name} ${n.op_type} ${(n.inputs || []).join(" ")} ${(n.outputs || []).join(" ")}`.toLowerCase();
       if (hay.includes(q)) out.push({ icon: "▪", label: `${n.display_name}`, sub: `${n.op_type}`, run: () => {
         setMode("browse");
-        if (state.useNetron) {
-          netronFocusByName(n.display_name || n.id);
-          return;
-        }
-        browseGraph.focusNode(n.id); browseGraph.selectExternal(n.id);
-        if (!browseGraph.expanded.has(n.id)) browseGraph.toggleExpand(n.id);
-        showProps("browse", n.id);
+        netronFocusByName(n.display_name || n.id);
       }});
     }
   } else if (state.mode === "compare") {
     for (const [id, n] of Object.entries(state.compare.nodesA)) {
       if (`${id} ${n.display} ${n.op}`.toLowerCase().includes(q))
         out.push({ icon: "🅐", label: `${n.display || id}`, sub: `${n.op} · A 侧`, run: () => {
-          graphA.focusNode(id); graphA.selectExternal(id);
-          if (!graphA.expanded.has(id)) graphA.toggleExpand(id);
-          showProps("a", id);
+          netronFocusId("netron-frame-a", id);
         }});
     }
     for (const [id, n] of Object.entries(state.compare.nodesB)) {
       if (`${id} ${n.display} ${n.op}`.toLowerCase().includes(q))
         out.push({ icon: "🅑", label: `${n.display || id}`, sub: `${n.op} · B 侧`, run: () => {
-          graphB.focusNode(id); graphB.selectExternal(id);
-          if (!graphB.expanded.has(id)) graphB.toggleExpand(id);
-          showProps("b", id);
+          netronFocusId("netron-frame-b", id);
         }});
     }
   } else if (state.mode === "pytorch" && state.pytorch.result && state.pytorch.result.ok) {
     for (const n of flattenClient(state.pytorch.result.module_tree, 0)) {
       if (`${n.path} ${n.class_name}`.toLowerCase().includes(q))
         out.push({ icon: "▪", label: `${n.class_name}`, sub: n.path || "(root)", run: () => {
-          ptGraph.focusNode(n.path || "__root__"); ptGraph.selectExternal(n.path || "__root__");
+          showPtDetail(n.path);
         }});
     }
   }
   return out.slice(0, 40);
 }
 
-function openPalette(prefill = "") {
+function openPalette() {
   $("palette").classList.remove("hidden");
-  $("palette-input").value = prefill;
+  $("palette-input").value = "";
   $("palette-input").focus();
   renderPalette();
 }
@@ -1194,8 +747,7 @@ async function loadPytorch() {
     setStatus($("pt-status"), msg, res.degraded ? "err" : "ok");
     refreshWelcome();
     refreshLayerPanel();
-    renderPtTree();
-    renderPtGraph();
+    renderPtMain();
   } catch (e) {
     setStatus($("pt-status"), `加载失败: ${e.message}`, "err");
   }
@@ -1212,102 +764,68 @@ function flattenClient(tree, depth) {
   for (const c of tree.children || []) out.push(...flattenClient(c, depth + 1));
   return out;
 }
-function renderPtTree() {
+
+function renderPtMain() {
   const res = state.pytorch.result;
-  if (!res || !res.ok) return;
-  const flat = flattenClient(res.module_tree, 0);
-  $("pt-tree").innerHTML = flat.map((n) => `
-    <div class="pt-row" data-path="${esc(n.path)}">
-      <span class="pt-depth">${"· ".repeat(n.depth)}</span>
-      <span><b>${esc(n.class_name)}</b> <span style="color:var(--muted)">${esc(n.path || "(root)")}</span>
-      ${n.is_leaf ? '<span class="pt-leaf">leaf</span>' : ""}
-      ${n.param_count ? `<span style="color:var(--muted)">${n.param_count} params</span>` : ""}</span>
-    </div>`).join("");
-  $("pt-tree").querySelectorAll(".pt-row").forEach((el) =>
+  if (!res || !res.ok) { $("pt-main").innerHTML = ""; return; }
+  const overview = state.pytorch.view === "overview";
+  const html = [];
+  const walk = (node, depth) => {
+    const collapsed = overview && (node.is_leaf || !(node.children || []).length);
+    html.push(`<div class="pt-row" data-path="${esc(node.path)}" style="padding-left:${depth * 18}px">
+      <span><b>${esc(node.class_name)}</b> <span style="color:var(--muted)">${esc(node.path || "(root)")}</span>
+      ${node.is_leaf ? '<span class="pt-leaf">leaf</span>' : ""}
+      ${node.param_count ? `<span style="color:var(--muted)">${node.param_count.toLocaleString()} params</span>` : ""}</span>
+    </div>`);
+    if (collapsed) return;
+    for (const c of node.children || []) walk(c, depth + 1);
+  };
+  walk(res.module_tree, 0);
+  $("pt-main").innerHTML = html.join("");
+  $("pt-main").querySelectorAll(".pt-row").forEach((el) =>
     el.addEventListener("click", () => {
-      $("pt-tree").querySelectorAll(".pt-row").forEach((r) => r.classList.remove("sel"));
+      $("pt-main").querySelectorAll(".pt-row").forEach((r) => r.classList.remove("sel"));
       el.classList.add("sel");
+      state.pytorch.selected = el.dataset.path;
       showPtDetail(el.dataset.path);
-      if (ptGraph.boxes[el.dataset.path]) { ptGraph.focusNode(el.dataset.path); ptGraph.selectExternal(el.dataset.path); }
     }));
 }
-function ptLayout() {
+
+function showPtDetail(path) {
   const res = state.pytorch.result;
-  if (!res || !res.ok) return null;
-  const overview = state.pytorch.view === "overview";
-  const boxes = {}; const edges = {};
-  let y = 0;
-  const NODE_W = 190, NODE_H = 40, XG = 64, YG = 18;
-  function walk(node, depth) {
-    const path = node.path || "__root__";
-    const collapsed = overview && (node.is_leaf || !(node.children || []).length);
-    boxes[path] = { node_id: path, x: depth * (NODE_W + XG), y: y * (NODE_H + YG),
-      w: NODE_W, h: NODE_H, kind: "node", label: node.class_name };
-    y += 1;
-    if (collapsed) return;
-    for (const c of node.children || []) {
-      edges[`e:${node.path || "root"}->${c.path}`] = { src: node.path || "__root__", dst: c.path };
-      walk(c, depth + 1);
-    }
-  }
-  walk(res.module_tree, 0);
-  const edge_points = {};
-  for (const [id, e] of Object.entries(edges)) {
-    const sb = boxes[e.src], db = boxes[e.dst];
-    if (!sb || !db) continue;
-    edge_points[id] = { src: [sb.x + sb.w, sb.y + sb.h / 2], dst: [db.x, db.y + db.h / 2], tensor: "" };
-  }
-  const maxDepth = Math.max(0, ...Object.values(boxes).map((b) => b.x));
-  return { boxes, edge_points, width: maxDepth + NODE_W + 40, height: y * (NODE_H + YG) };
-}
-function renderPtGraph() {
-  const layout = ptLayout();
-  if (!layout) return;
-  const extra = {};
-  for (const id in layout.boxes) extra[id] = { op: layout.boxes[id].label, outTensors: [] };
-  ptGraph.setData(layout, extra);
-}
-function ptDetailHTML(path) {
-  const res = state.pytorch.result;
-  if (!res || !res.ok) return null;
+  if (!path || !res || !res.ok) { $("props").classList.add("hidden"); return; }
   const flat = flattenClient(res.module_tree, 0);
   const n = flat.find((x) => x.path === path);
-  if (!n) return null;
-  return `<h5><span>${esc(n.path || "(root)")}</span><span class="op-tag">${esc(n.class_name)}</span></h5>
-    <table><tr><td>参数量</td><td>${n.param_count}</td></tr>
-    <tr><td>参数字节</td><td>${n.param_bytes || 0}</td></tr>
-    <tr><td>leaf</td><td>${n.is_leaf ? "是" : "否"}</td></tr></table>
-    ${res.fx_error ? `<div class="warnline">FX 诊断: ${esc(res.fx_error)}</div>` : ""}`;
-}
-function showPtDetail(path) {
-  if (!path) { $("props").classList.add("hidden"); return; }
+  if (!n) return;
   openProps();
   $("props-title").textContent = "模块属性";
-  $("props-body").innerHTML = ptDetailHTML(path) || "";
+  $("props-body").innerHTML = kvTable([
+    ["类名", n.class_name], ["路径", n.path || "(root)"],
+    ["参数量", n.param_count], ["参数字节", n.param_bytes || 0],
+    ["leaf", n.is_leaf ? "是" : "否"],
+  ]) + (res.fx_error ? `<p style="color:var(--ambiguous)">FX 诊断: <code>${esc(res.fx_error)}</code></p>` : "");
 }
 
-// ---------- keyboard shortcuts ----------
+// ---------- keyboard ----------
 window.addEventListener("keydown", (e) => {
-  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
     openPalette();
     return;
   }
   if (e.key === "Escape") {
-    [browseGraph, graphA, graphB, ptGraph].forEach((g) => g.collapseAll());
     closeCtxMenu();
     $("dlg-compare").classList.add("hidden");
     closePalette();
     return;
   }
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
   if (inField || e.metaKey || e.ctrlKey) return;
   if (e.key === "o" || e.key === "O") { e.preventDefault(); $("file-open").click(); }
   else if (e.key === "d" || e.key === "D") { e.preventDefault(); openCompareDialog(); }
-  else if (e.key === "f" || e.key === "F") { runAction("fit"); }
 });
 
-// test/debug hook (also used by automation): expose module internals
+// ---------- debug/test hook ----------
 window.__mtbx = { state, applyCompareNetronViews, netronApplyDiffTint,
   netronFocusId, refreshLayers, refreshLayerPanel };
 

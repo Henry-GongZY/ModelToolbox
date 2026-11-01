@@ -16,7 +16,6 @@ PT_DIR = os.path.join(FIXTURES, "pytorch")
 
 from modeltoolbox.diff_engine import diff_models  # noqa: E402
 from modeltoolbox.folding import find_common_groups  # noqa: E402
-from modeltoolbox.layout import layout_diff_pair  # noqa: E402
 from modeltoolbox.onnx_importer import load_onnx  # noqa: E402
 from modeltoolbox.pytorch_importer import PyTorchImportSpec, load_pytorch_module  # noqa: E402
 
@@ -88,12 +87,9 @@ def test_unet_core_matches_and_stem_is_added(ir_a, ir_b):
     assert all(nd.changes == [] for nd in added)
 
 
-def test_unet_layout_pair_and_folding(ir_a, ir_b):
+def test_unet_folding(ir_a, ir_b):
     from modeltoolbox.matcher import match_graphs
     match = match_graphs(ir_a, ir_b)
-    la, lb = layout_diff_pair(ir_a, ir_b, match.matches)
-    for m in match.matches:
-        assert la.boxes[m.a_node_id].y == lb.boxes[m.b_node_id].y
     folding = find_common_groups(ir_a, ir_b, match.matches)
     # the dense matched core should form at least one fold group
     assert folding.groups, "UNet core should be foldable"

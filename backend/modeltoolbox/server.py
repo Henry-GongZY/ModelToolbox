@@ -19,7 +19,6 @@ from urllib.parse import urlparse
 
 from modeltoolbox.diff_engine import DiffIR, diff_models
 from modeltoolbox.folding import apply_folding, find_common_groups
-from modeltoolbox.layout import layout_diff_pair, layout_single
 from modeltoolbox.matcher import match_graphs
 from modeltoolbox.onnx_importer import ModelLoadError, load_onnx, load_onnx_bytes
 from modeltoolbox.profile_adapter import ProfileFormatError, load_profile, load_profile_text
@@ -220,7 +219,6 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/model/load": self._model_load,
                 "/api/model/upload": self._model_upload,
                 "/api/model/nodes": self._model_nodes,
-                "/api/model/layout": self._model_layout,
                 "/api/diff": self._diff,
                 "/api/fold": self._fold,
                 "/api/profile/load": self._profile_load,
@@ -259,11 +257,10 @@ class Handler(BaseHTTPRequestHandler):
             self._error(f"invalid base64 payload: {e}"); return
         model_id = uuid.uuid4().hex[:12]
         ir = load_onnx_bytes(data, model_id, source_path=name)
-        layout = layout_single(ir)
         with STORE.lock:
             STORE.models[model_id] = {"ir": ir, "raw": data, "ts": time.time()}
             STORE.gc()
-        self._json(self._model_payload(ir, layout))
+        self._json(self._model_payload(ir))
 
     def _model_nodes(self, body):
         """On-demand node details (used by expandable graph nodes)."""
@@ -308,7 +305,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(self._profile_payload(profile_id, profile, mapped, ir))
 
     @staticmethod
-    def _model_payload(ir, layout):
+    def _model_payload(ir):
         return {
             "model_id": ir.model_id,
             "meta": {
@@ -324,7 +321,6 @@ class Handler(BaseHTTPRequestHandler):
                 "warnings": ir.warnings,
             },
             "ir": ir.to_dict(),
-            "layout": _layout_dict(layout),
         }
 
     @staticmethod
@@ -375,16 +371,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ModelLoadError(f"cannot read model file '{path}': {e}") from e
         model_id = uuid.uuid4().hex[:12]
         ir = load_onnx(path, model_id)
-        layout = layout_single(ir)
         with STORE.lock:
             STORE.models[model_id] = {"ir": ir, "raw": raw, "ts": time.time()}
             STORE.gc()
-        self._json(self._model_payload(ir, layout))
-
-    def _model_layout(self, body):
-        ir = self._get_model(body)
-        layout = layout_single(ir)
-        self._json({"model_id": ir.model_id, "layout": _layout_dict(layout)})
+        self._json(self._model_payload(ir))
 
     def _get_model(self, body):
         model_id = body.get("model_id")
@@ -421,7 +411,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         match = match_graphs(a, b)
         diff = diff_models(a, b)
-        la, lb = layout_diff_pair(a, b, match.matches)
         folding = find_common_groups(
             a, b, match.matches,
             min_group_size=int(body.get("min_group_size", 3)),
@@ -442,7 +431,6 @@ class Handler(BaseHTTPRequestHandler):
             "match": match.to_dict(),
             "diff": diff.to_dict(),
             "folding": _folding_dict(folding),
-            "layouts": {"a": _layout_dict(la), "b": _layout_dict(lb)},
             # light node summaries so the UI can render Netron-style nodes
             "nodes_a": {n.id: {"op": n.op_type, "display": n.display_name,
                                 "outputs": [t for t in n.outputs if t]}
@@ -586,17 +574,6 @@ def _diff_export(diff: DiffIR, fmt: str):
 def _node_dict(n):
     from dataclasses import asdict
     return asdict(n)
-
-
-def _layout_dict(lr) -> dict:
-    return {
-        "boxes": {nid: vars(b) for nid, b in lr.boxes.items()},
-        "width": lr.width, "height": lr.height,
-        "ranks": lr.ranks,
-        "edge_points": lr.edge_points,
-        "orientation": getattr(lr, "orientation", "horizontal"),
-        "x_origin": getattr(lr, "x_origin", 0.0),
-    }
 
 
 def _folding_dict(folding) -> dict:

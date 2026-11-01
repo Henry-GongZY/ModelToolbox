@@ -92,7 +92,6 @@ def test_model_load_good(server):
     assert body["meta"]["node_count"] == 3
     assert body["meta"]["fingerprints"]["content"]
     assert len(body["ir"]["nodes"]) == 3
-    assert body["layout"]["boxes"]["conv_1"]["x"] >= 0
 
 
 def test_model_load_bad_files(server):
@@ -117,12 +116,7 @@ def test_diff_end_to_end(server):
     assert status == 200
     assert body["diff"]["summary"]["unchanged"] == 3
     assert body["match"]["summary"]["matched_count"] == 3
-    assert body["layouts"]["a"]["boxes"] and body["layouts"]["b"]["boxes"]
-    # matched pairs share y
-    a_boxes = body["layouts"]["a"]["boxes"]
-    b_boxes = body["layouts"]["b"]["boxes"]
-    for m in body["match"]["matches"]:
-        assert a_boxes[m["a_node_id"]]["y"] == b_boxes[m["b_node_id"]]["y"]
+    assert "layouts" not in body  # rendering is Netron's job now
 
 
 def test_diff_missing_args(server):
@@ -222,8 +216,8 @@ def test_delete_session(server):
     req = urllib.request.Request(server + f"/api/model/{mid}", method="DELETE")
     with urllib.request.urlopen(req, timeout=30) as r:
         assert r.status == 200
-    status, body = _post(server + "/api/model/layout", {"model_id": mid})
-    assert status == 500 or status == 400
+    status, body = _post(server + "/api/model/load", {"path": fx("linear.onnx")})
+    assert status == 200  # server still healthy after delete
     # unknown id delete -> 404
     req = urllib.request.Request(server + "/api/model/zzz", method="DELETE")
     try:
