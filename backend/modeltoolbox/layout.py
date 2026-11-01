@@ -37,6 +37,7 @@ class LayoutResult:
     ranks: Dict[str, int] = field(default_factory=dict)
     edge_points: Dict[str, dict] = field(default_factory=dict)
     orientation: str = "horizontal"  # "horizontal" (rank→x) | "vertical" (rank→y)
+    x_origin: float = 0.0  # left channel reserved for skip-edge arcs (vertical)
 
 
 def pseudo_in(tensor: str) -> str:
@@ -223,14 +224,74 @@ def layout_single(ir: GraphIR) -> LayoutResult:
     vertical = horiz_span > vert_span * 1.35 or (horiz_span > 5000 and horiz_h < 1000)
 
     if vertical:
+        # Spine-centering: pick the through-path (one node per rank, chained)
+        # and re-map its layer-internal slot to the horizontal middle, with
+        # remaining nodes filling the freed slots in their existing relative
+        # order. This yields Netron's "left skip channel / center spine /
+        # right side-chains" structure instead of a left-hugging column.
+        succ_sets: Dict[str, set] = {}
+        for nid in preds:
+            for p in preds[nid]:
+                succ_sets.setdefault(p, set()).add(nid)
+        spine_ids: set = set()
+        spine_prev = None
+        for r in sorted_ranks:
+            layer = [n for n in layers[r] if kind_of(n) == "node"]
+            if not layer:
+                continue
+            pick = None
+            if spine_prev is not None:
+                cands = [n for n in layer if n in succ_sets.get(spine_prev, set())]
+                if cands:
+                    pick = cands[0]
+            if pick is None:
+                pick = layer[0]
+            spine_ids.add(pick)
+            spine_prev = pick
+
+        new_index: Dict[str, int] = {}
+        for r in sorted_ranks:
+            layer = [n for n in layers[r] if kind_of(n) == "node"]
+            spine_here = [n for n in layer if n in spine_ids][:1]
+            rest = [n for n in layer if n not in spine_here]
+            k = (len(layer) - 1) // 2 if spine_here else 0
+            final = rest[:k] + spine_here + rest[k:]
+            for i, nid in enumerate(final):
+                new_index[nid] = i
+            # pseudo io nodes keep their own placement (they follow anchors)
+        index_in_rank = {**{n: i for n, i in new_index.items()},
+                         **{n: index_in_rank[n] for n in index_in_rank
+                            if kind_of(n) != "node"}}
+
+        # pseudo io nodes follow their anchor node's column
+        anchor_of: Dict[str, str] = {}
+        for e in ir.edges:
+            if e.src == "" and e.dst:
+                anchor_of.setdefault(pseudo_in(e.tensor), e.dst)
+            if e.dst == "" and e.src:
+                anchor_of.setdefault(pseudo_out(e.tensor), e.src)
+
+        X_ORIGIN = 320.0  # left channel: long skip edges arc through here
+        res.x_origin = X_ORIGIN
         for nid in positions_order:
             r = ranks.get(nid, pseudo_rank.get(nid, 0))
+            if kind_of(nid) in ("input", "output"):
+                continue
             y = r * (NODE_H + Y_GAP) + (NODE_H + Y_GAP)  # shift down for input pseudos at rank -1
-            x = index_in_rank[nid] * (NODE_W + X_GAP)
+            x = X_ORIGIN + index_in_rank[nid] * (NODE_W + X_GAP)
             res.boxes[nid] = NodeBox(node_id=nid, x=x, y=y, w=NODE_W, h=NODE_H,
                                      kind=kind_of(nid), label=label_of(nid))
             if nid in ranks:
                 res.ranks[nid] = r
+        for nid in positions_order:
+            if kind_of(nid) not in ("input", "output"):
+                continue
+            r = pseudo_rank.get(nid, 0)
+            a = anchor_of.get(nid)
+            x = res.boxes[a].x if a and a in res.boxes else X_ORIGIN
+            y = r * (NODE_H + Y_GAP) + (NODE_H + Y_GAP)
+            res.boxes[nid] = NodeBox(node_id=nid, x=x, y=y, w=NODE_W, h=NODE_H,
+                                     kind=kind_of(nid), label=label_of(nid))
         res.orientation = "vertical"
     else:
         for nid in positions_order:

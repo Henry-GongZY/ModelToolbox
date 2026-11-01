@@ -78,6 +78,7 @@ export class GraphView {
     this.boxes = layout.boxes || {};
     this.edgePoints = layout.edge_points || {};
     this.orientation = layout.orientation || "horizontal";
+    this.xOrigin = typeof layout.x_origin === "number" ? layout.x_origin : 0;
     this.nodeExtra = nodeExtra || {};
     this.rendered.clear();
     this.edgeLayer.innerHTML = "";
@@ -182,20 +183,24 @@ export class GraphView {
   fitView() {
     const r = this.svg.getBoundingClientRect();
     const vw = Math.max(r.width, 10), vh = Math.max(r.height, 10);
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    let y0 = Infinity, x1 = -Infinity, y1 = -Infinity, minX = Infinity;
     for (const id in this.boxes) {
       const b = this.boxes[id];
-      x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+      minX = Math.min(minX, b.x);
+      y0 = Math.min(y0, b.y);
       x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h);
     }
-    if (!isFinite(x0)) { x0 = 0; y0 = 0; x1 = 300; y1 = 200; }
+    // vertical layouts reserve a left channel for skip arcs (boxes start at
+    // x_origin>0) — include the channel by starting the view at world 0
+    let x0 = (this.orientation === "vertical") ? 0 : (isFinite(minX) ? minX : 0);
+    if (!isFinite(y0)) { x0 = 0; y0 = 0; x1 = 300; y1 = 200; }
     const w = Math.max(x1 - x0, 300), h = Math.max(y1 - y0, 200);
     const pad = 40;
     let scale = Math.min((vw - pad * 2) / w, (vh - pad * 2) / h, 1.5);
     if (scale < 0.45) {
       // very wide/tall graphs (e.g. deep chains): don't shrink into
       // illegibility — fit the height, anchor top-left, let the user pan.
-      scale = 0.45;
+      scale = 0.55;
       this.scale = scale;
       this.tx = pad - x0 * scale;
       this.ty = pad - y0 * scale;
@@ -322,12 +327,11 @@ export class GraphView {
       if (this.orientation === "vertical") {
         const span = dy - sy;
         if (span > 420) {
-          // long skip edge: arc around the side like Netron instead of
-          // cutting straight through the spine
-          const dir = dx >= sx ? 1 : -1;
-          const b = Math.min(280, 70 + span / 5);
-          d = `M ${sx} ${sy} C ${sx + dir * b} ${sy + span * 0.22}, ` +
-              `${dx + dir * b} ${dy - span * 0.22}, ${dx} ${dy}`;
+          // long skip edge: dedicated left channel (Netron-like), keeping
+          // the right side free for short side-chains
+          const b = Math.min(320, 80 + span / 4);
+          d = `M ${sx} ${sy} C ${sx - b} ${sy + span * 0.22}, ` +
+              `${dx - b} ${dy - span * 0.22}, ${dx} ${dy}`;
         } else {
           d = `M ${sx} ${sy} C ${sx} ${midY}, ${dx} ${midY}, ${dx} ${dy}`;
         }
