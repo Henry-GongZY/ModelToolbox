@@ -12,6 +12,15 @@
 - **PyTorch 层级**：子进程隔离加载本地 `nn.Module` 层级，leaf 模块规则，FX 算子图捕获，失败可读降级。
 - **导出**：diff → JSON/CSV/Markdown/HTML；profile → JSON/CSV/Markdown。
 
+## Netron viewer 依赖说明
+
+模型图查看器基于 [Netron](https://github.com/lutzroeder/netron)（MIT License，
+Copyright (c) Lutz Roeder）。viewer 前端**不在本仓库中存储**，而是作为 pip 依赖
+`netron>=9.3.5,<10` 安装，由 `modeltoolbox/netron_assets.py` 在运行时从
+site-packages 读取并提供服务。`backend/modeltoolbox/frontend/netron.patch`
+以补丁形式移除 Google Analytics 遥测、ipinfo.io 查询和 cookie 弹窗，保证
+**零外发流量**；补丁若与已安装版本不匹配会在启动时报错而不是静默失效。
+
 ## 安装与启动
 
 ### 方式一：从 PyPI 安装（推荐）

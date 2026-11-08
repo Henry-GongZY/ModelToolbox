@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
+from modeltoolbox import netron_assets
 from modeltoolbox.diff_engine import DiffIR, diff_models
 from modeltoolbox.folding import apply_folding, find_common_groups
 from modeltoolbox.matcher import match_graphs
@@ -109,9 +110,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # ---- vendored Netron viewer (official MIT frontend, see frontend/netron/) ----
+    # ---- Netron viewer, served from the installed `netron` pip package ----
 
-    NETRON_DIR = os.path.join(FRONTEND_DIR, "netron")
     NETRON_MIME = {
         ".html": "text/html; charset=utf-8", ".js": "text/javascript",
         ".css": "text/css", ".json": "application/json",
@@ -142,17 +142,17 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
-        fp = os.path.normpath(os.path.join(self.NETRON_DIR, sub[len("/netron/"):]))
-        if not fp.startswith(self.NETRON_DIR) or not os.path.isfile(fp):
-            self._error(f"netron: not found {sub}", 404, "not_found")
+        rel = sub[len("/netron/"):]
+        try:
+            body = netron_assets.read(rel)
+        except netron_assets.NetronAssetsError as exc:
+            self._error(str(exc), 404, "not_found")
             return
-        with open(fp, "rb") as f:
-            body = f.read()
-        ctype = self.NETRON_MIME.get(os.path.splitext(fp)[1], "application/octet-stream")
+        ctype = self.NETRON_MIME.get(os.path.splitext(rel)[1], "application/octet-stream")
         if sub == "/netron/index.html":
             html = body.decode("utf-8")
             model_id = (parse_qs(parsed.query).get("model") or [None])[0]
-            meta = '<meta name="version" content="9.3.4">'
+            meta = f'<meta name="version" content="{netron_assets.netron_version()}">'
             if model_id:
                 # relative path: the viewer's _url() joins it with the page
                 # directory (/netron/), producing /netron/data/<id>.onnx
@@ -590,6 +590,11 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
+    try:
+        netron_assets.warmup()
+    except netron_assets.NetronAssetsError as exc:
+        parser.error(str(exc))
+        return
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"ModelToolbox serving on http://{args.host}:{args.port} (Ctrl-C to stop)",
           flush=True)

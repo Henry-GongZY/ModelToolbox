@@ -297,3 +297,27 @@ def test_netron_viewer_routes(server):
         assert False
     except urllib.error.HTTPError as e:
         assert e.code == 404
+
+
+def test_netron_assets_patched(server):
+    """The viewer is served from the `netron` pip package with the local
+    telemetry-removal patch applied (no GA, no ipinfo.io, no consent dialog)."""
+    from modeltoolbox import netron_assets
+    with urllib.request.urlopen(server + "/netron/base.js", timeout=30) as r:
+        base_js = r.read().decode()
+    assert "_enabled = false" in base_js  # patch applied
+    with urllib.request.urlopen(server + "/netron/browser.js", timeout=30) as r:
+        browser_js = r.read().decode()
+    assert "ipinfo.io/json" not in browser_js      # region lookup removed
+    assert "_telemetry.start(" not in browser_js   # GA flow removed
+    assert "848W2NVWVH" not in browser_js          # Google Analytics measurement id
+    # version meta reflects the installed netron package, not a hardcoded value
+    with urllib.request.urlopen(server + "/netron/", timeout=30) as r:
+        html = r.read().decode()
+    assert f'content="{netron_assets.netron_version()}"' in html
+    # path traversal is rejected
+    try:
+        urllib.request.urlopen(server + "/netron/../pyproject.toml", timeout=30)
+        assert False
+    except urllib.error.HTTPError as e:
+        assert e.code == 404

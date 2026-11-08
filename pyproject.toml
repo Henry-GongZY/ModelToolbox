@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Visualization",
     "Topic :: Software Development :: Debuggers",
 ]
-dependencies = ["onnx>=1.15", "numpy"]
+dependencies = ["onnx>=1.15", "numpy", "netron>=9.3.5,<10"]
 
 [project.optional-dependencies]
 torch = ["torch"]

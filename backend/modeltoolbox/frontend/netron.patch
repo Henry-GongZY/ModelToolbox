@@ -1,0 +1,98 @@
+# ModelToolbox telemetry-removal patch for the Netron viewer.
+#
+# The Netron web viewer is NOT stored in this repository. It is provided by
+# the `netron` pip package (MIT License, Copyright (c) Lutz Roeder,
+# https://github.com/lutzroeder/netron) and served at runtime from
+# site-packages. This patch removes Google Analytics telemetry, the
+# ipinfo.io region lookup and the cookie-consent dialog so the tool stays
+# strictly local-first: nothing is ever sent to an external service.
+#
+# Applies to: netron>=9.3.5,<10  (generated against netron 9.3.5)
+# Applied by: modeltoolbox.netron_assets (fail-loud if the source drifts)
+
+--- a/base.js
++++ b/base.js
+@@ -1312,6 +1312,8 @@
+ base.Telemetry = class {
+ 
+     constructor(window) {
++        /* ModelToolbox local build: telemetry permanently disabled */
++        this._enabled = false;
+         this._window = window;
+         this._navigator = window.navigator;
+         this._config = new Map();
+@@ -1349,6 +1351,7 @@
+     }
+ 
+     async start(measurement_id, client_id, session) {
++        this._enabled = false; // local build: never start
+         this._session = session && typeof session === 'string' ? session.replace(/^GS1\.1\./, '').split('.') : null;
+         this._session = Array.isArray(this._session) && this._session.length >= 7 ? this._session : ['0', '0', '0', '0', '0', '0', '0'];
+         this._session[0] = Date.now();
+@@ -1421,6 +1424,7 @@
+     }
+ 
+     send(name, params) {
++        if (!this._enabled) { return; }
+         if (this._session) {
+             try {
+                 params = { event_name: name, ...this._metadata, ...params };
+
+--- a/browser.js
++++ b/browser.js
+@@ -73,53 +73,10 @@
+             if (this._getCookie('consent') || this._getCookie('_ga')) {
+                 return;
+             }
+-            let consent = true;
+-            try {
+-                const text = await this._fetch('https://ipinfo.io/json', { 'Content-Type': 'application/json' }, 'utf-8', null, 2000);
+-                const json = JSON.parse(text);
+-                const countries = ['AT', 'BE', 'BG', 'HR', 'CZ', 'CY', 'DK', 'EE', 'FI', 'FR', 'DE', 'EL', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'NO', 'PL', 'PT', 'SK', 'ES', 'SE', 'GB', 'UK', 'GR', 'EU', 'RO'];
+-                if (json && json.country && countries.indexOf(json.country) === -1) {
+-                    consent = false;
+-                }
+-            } catch {
+-                // continue regardless of error
+-            }
+-            if (consent) {
+-                document.body.classList.remove('spinner');
+-                await this.message('This app uses cookies to report errors and anonymous usage information.', null, 'Accept');
+-            }
+-            this._setCookie('consent', Date.now().toString(), 30);
++            /* ModelToolbox local build: consent dialog and ipinfo.io lookup removed */
+         };
+         const telemetry = async () => {
+-            if (this._environment.packaged) {
+-                window.addEventListener('error', (event) => {
+-                    if (event instanceof window.ErrorEvent && event.error && event.error instanceof Error) {
+-                        this.exception(event.error, true);
+-                    } else {
+-                        const message = event && event.message ? event.message : JSON.stringify(event);
+-                        const error = new Error(message);
+-                        this.exception(error, true);
+-                    }
+-                });
+-                const measurement_id = '848W2NVWVH';
+-                const user = this._getCookie('_ga').replace(/^(GA1\.\d\.)*/, '');
+-                const session = this._getCookie(`_ga${measurement_id}`);
+-                await this._telemetry.start(`G-${measurement_id}`, user, session);
+-                this._telemetry.set('page_location', document.location && document.location.href ? document.location.href : null);
+-                this._telemetry.set('page_title', document.title ? document.title : null);
+-                this._telemetry.set('page_referrer', document.referrer ? document.referrer : null);
+-                this._telemetry.send('page_view', {
+-                    app_name: this.type,
+-                    app_version: this.version,
+-                });
+-                this._telemetry.send('scroll', {
+-                    percent_scrolled: 90,
+-                    app_name: this.type,
+-                    app_version: this.version
+-                });
+-                this._setCookie('_ga', `GA1.2.${this._telemetry.get('client_id')}`, 1200);
+-                this._setCookie(`_ga${measurement_id}`, `GS1.1.${this._telemetry.session}`, 1200);
+-            }
++            /* ModelToolbox local build: telemetry disabled (no GA) */
+         };
+         const capabilities = async () => {
+             const filter = (list) => {
